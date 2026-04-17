@@ -1268,11 +1268,16 @@ func (e *Engine) runPrepare(ctx context.Context) error {
 	return nil
 }
 
-// startProgressReporter launches a background goroutine that logs throughput
+// startProgressReporter launches a background goroutine that logs performance
 // progress every 10 seconds for the given phase ("warmup" or "bench").
-// The verbosity level controls detail:
-//   - verbosity >= 1 (–v):  INFO line every 10 s with interval ops + GiB/s
-//   - verbosity >= 2 (–vv): also logs elapsed/remaining and per-track error count
+// Progress lines are always written to e.out (stderr) regardless of verbosity:
+//
+//	[phase] track="…"  elapsed=Xs  remaining=Ys  ops=N  R/s  T MiB/s  p50=Xms  p99=Yms  errs=E
+//
+// Additional detail is gated on verbosity level:
+//   - verbosity >= 1 (-v):  write-pool pipeline health ([pool] line) every tick
+//   - verbosity >= 2 (-vv): Go heap/GC cycles, per-interval CPU percentages,
+//     process RSS, page-cache and anon-pages deltas ([runtime] and [memory] lines)
 //
 // Returns a stop function; call it after the phase completes to ensure the
 // goroutine is torn down cleanly (in addition to ctx cancellation).
@@ -1316,21 +1321,22 @@ func (e *Engine) startProgressReporter(ctx context.Context, phase string, total 
 					dBytes := float64(cur.bytes - last[i].bytes)
 					dOps := cur.ops - last[i].ops
 					last[i] = cur
-					tputGiB := (dBytes / interval) / bytesPerGiB
+					tputMiB := (dBytes / interval) / (bytesPerGiB / 1024)
+					opsPerSec := float64(dOps) / interval
 
-					if e.verbosity >= 2 {
-						// -vv: extended format with elapsed/remaining via logger
-						logger.Infof("[%s] track=%q  elapsed=%s  remaining=%s  interval-ops=%d  interval-throughput=%.2f GiB/s  total-ops=%d  total-errs=%d\n",
-							phase, ts.cfg.Name,
-							elapsed.Round(time.Second), remaining.Round(time.Second),
-							dOps, tputGiB, cur.ops, cur.errs)
-					} else {
-						// Default: always print compact line to e.out (teed to stderr +
-						// console.log), bypassing the logger severity filter so progress
-						// is visible without -v.
-						fmt.Fprintf(e.out, "[%s] track=%q  interval-ops=%d  interval-throughput=%.2f GiB/s  total-ops=%d\n",
-							phase, ts.cfg.Name, dOps, tputGiB, cur.ops)
-					}
+					// Snapshot latency percentiles non-destructively (lock held briefly).
+					// Values are in microseconds; convert to milliseconds for display.
+					_, totalPerc := ts.hists.Snapshot()
+					p50ms := totalPerc.P50 / 1000.0
+					p99ms := totalPerc.P99 / 1000.0
+
+					// Always print the full perf line to e.out (bypasses logger severity
+					// filter) so ops/throughput/latency are visible at every verbosity
+					// level, including the default (no flags).
+					fmt.Fprintf(e.out, "[%s] track=%q  elapsed=%s  remaining=%s  ops=%d  %.0f/s  %.1f MiB/s  p50=%.1fms  p99=%.1fms  errs=%d\n",
+						phase, ts.cfg.Name,
+						elapsed.Round(time.Second), remaining.Round(time.Second),
+						cur.ops, opsPerSec, tputMiB, p50ms, p99ms, cur.errs)
 				}
 				// Pool pipeline health: fill rates and coordination overhead.
 				// Reported every tick at verbosity >= 1 (-v) when the write pool is active.
@@ -1369,11 +1375,11 @@ func (e *Engine) startProgressReporter(ctx context.Context, phase string, total 
 							tag, numProducers, prodGiB, consGiB, headroom)
 					}
 				}
-				// Live runtime memory + GC + CPU metrics (verbosity ≥ 1, -v).
+				// Live runtime memory + GC + CPU metrics (-vv, verbosity ≥ 2 only).
 				// Uses runtime/metrics (no STW) for heap and GC-cycle count.
 				// CPU percentages are per-interval deltas normalised to total system
 				// capacity (all cores = 100 %) so they are directly comparable.
-				if e.verbosity >= 1 {
+				if e.verbosity >= 2 {
 					samples := []runtimemetrics.Sample{
 						{Name: "/memory/classes/heap/objects:bytes"},
 						{Name: "/gc/cycles/total:gc-cycles"},
