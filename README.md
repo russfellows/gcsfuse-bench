@@ -28,7 +28,7 @@ make bench
 
 # Verify
 ./gcs-bench --version
-# gcsfuse version gcsfuse-v3-snap.4b7892bc+bench-v1.2.1 (Go version go1.26.1)
+# gcsfuse version gcsfuse-v3-snap.4b7892bc+bench-v1.2.2 (Go version go1.26.1)
 ```
 
 The `make bench` target injects a meaningful version string automatically.
