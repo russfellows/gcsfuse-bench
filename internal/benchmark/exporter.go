@@ -338,15 +338,15 @@ func printHumanSummary(w io.Writer, summary RunSummary) {
 			// never enters the file-backed page cache. Page-cache growth here
 			// reflects OS background activity (mapped libraries, results files, etc.),
 			// not GCS object data. Anon-page growth tracks Go heap expansion.
-			fmt.Fprintf(w, "  OS memory (Linux page cache — local disk/file activity only; GCS data does not enter page cache):\n")
+			_, _ = fmt.Fprintf(w, "  OS memory (Linux page cache — local disk/file activity only; GCS data does not enter page cache):\n")
 			fmt.Fprintf(w, "    Page cache (start): %s\n", humanBytes(float64(rt.StartCachedKiB)*1024))
-			fmt.Fprintf(w, "    Page cache (end):   %s  (Δ%+.0f MiB)\n",
+			_, _ = fmt.Fprintf(w, "    Page cache (end):   %s  (Δ%+.0f MiB)\n",
 				humanBytes(float64(rt.EndCachedKiB)*1024), float64(rt.EndCachedKiB-rt.StartCachedKiB)/1024)
 			fmt.Fprintf(w, "    Anon pages (start): %s\n", humanBytes(float64(rt.StartAnonPagesKiB)*1024))
-			fmt.Fprintf(w, "    Anon pages (end):   %s  (Δ%+.0f MiB)  — tracks Go heap growth\n",
+			_, _ = fmt.Fprintf(w, "    Anon pages (end):   %s  (Δ%+.0f MiB)  — tracks Go heap growth\n",
 				humanBytes(float64(rt.EndAnonPagesKiB)*1024), float64(rt.EndAnonPagesKiB-rt.StartAnonPagesKiB)/1024)
-			fmt.Fprintf(w, "    Disk pgpgin:        %d pages  — local disk reads by the OS kernel\n", rt.PgpginDelta)
-			fmt.Fprintf(w, "    Disk pgpgout:       %d pages  — OS evicting file-backed pages (normal memory reclaim)\n", rt.PgpgoutDelta)
+			_, _ = fmt.Fprintf(w, "    Disk pgpgin:        %d pages  — local disk reads by the OS kernel\n", rt.PgpginDelta)
+			_, _ = fmt.Fprintf(w, "    Disk pgpgout:       %d pages  — OS evicting file-backed pages (normal memory reclaim)\n", rt.PgpgoutDelta)
 		}
 	}
 

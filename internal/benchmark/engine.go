@@ -1333,7 +1333,7 @@ func (e *Engine) startProgressReporter(ctx context.Context, phase string, total 
 					// Always print the full perf line to e.out (bypasses logger severity
 					// filter) so ops/throughput/latency are visible at every verbosity
 					// level, including the default (no flags).
-					fmt.Fprintf(e.out, "[%s] track=%q  elapsed=%s  remaining=%s  ops=%d  %.0f/s  %.1f MiB/s  p50=%.1fms  p99=%.1fms  errs=%d\n",
+					_, _ = fmt.Fprintf(e.out, "[%s] track=%q  elapsed=%s  remaining=%s  ops=%d  %.0f/s  %.1f MiB/s  p50=%.1fms  p99=%.1fms  errs=%d\n",
 						phase, ts.cfg.Name,
 						elapsed.Round(time.Second), remaining.Round(time.Second),
 						cur.ops, opsPerSec, tputMiB, p50ms, p99ms, cur.errs)
