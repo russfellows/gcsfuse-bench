@@ -90,6 +90,11 @@ func runPrepare(t *testing.T, mb *mockBucket, objectCount int) TrackStats {
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
+	// Use minimal retry delay so tests don't sleep for real backoff durations.
+	engine.prepareRetryDelay = time.Nanosecond
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
 	summary, err := engine.Run(context.Background())
 	if err != nil {
 		t.Fatalf("engine.Run (prepare): %v", err)
@@ -203,6 +208,8 @@ func TestAvgOpSizeIsZeroWhenAllOpsFail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
+	// Use minimal retry delay so the test doesn't sleep through real backoff.
+	engine.prepareRetryDelay = time.Nanosecond
 	summary, err := engine.Run(context.Background())
 	// prepare returns non-nil err only on context cancellation; errors from
 	// individual writes are counted but not fatal at the Run level.

@@ -37,6 +37,12 @@ object is fully available to the caller.
 11. [RAPID Storage mode](#11-rapid-storage-mode)
 12. [Verbosity and diagnostic logging](#12-verbosity-and-diagnostic-logging)
 13. [MultiRangeDownloader (MRD) read type](#13-multirangedownloader-mrd-read-type)
+14. [Cleanup / delete — removing benchmark objects](#14-cleanup--delete--removing-benchmark-objects)
+    - [When to use it](#when-to-use-it)
+    - [How it works](#how-the-pipeline-works)
+    - [CLI flags](#cleanup-cli-flags)
+    - [Examples](#cleanup-examples)
+    - [Multi-host cleanup](#multi-host-cleanup)
 
 ---
 
@@ -1613,4 +1619,136 @@ config examples. Ready-to-use files:
 
 ./gcs-bench bench --config examples/benchmark-configs/unet3d-like-mrd.yaml \
     --output-path results/multirange
+```
+
+---
+
+## 14. Cleanup / delete — removing benchmark objects
+
+`gcs-bench cleanup` (alias: `gcs-bench delete`) deletes every object under a
+given GCS prefix. It is the counterpart to the prepare phase: once a benchmark
+cycle is done and you want to repopulate the bucket with fresh objects, run
+cleanup first so the prepare phase starts from a clean slate.
+
+Both names are identical — use whichever is clearer in your scripts:
+
+```bash
+gcs-bench cleanup --bucket my-bucket --object-prefix resnet50/
+gcs-bench delete  --bucket my-bucket --object-prefix resnet50/   # same thing
+```
+
+### When to use it
+
+| Situation | Action |
+|-----------|--------|
+| Re-running prepare with different object sizes or counts | Cleanup the old prefix first |
+| Switching from one workload config to another that writes to the same prefix | Cleanup to avoid stale objects |
+| End-of-test teardown to avoid GCS storage charges | Cleanup the entire benchmark prefix |
+| Auditing what is in a prefix before deleting | Use `--dry-run` first |
+
+### How the pipeline works
+
+The implementation uses a **producer / consumer pipeline** with a bounded
+channel between the lister and the delete workers:
+
+```
+ LIST goroutine (producer)          bounded channel            N delete workers (consumers)
+ ──────────────────────────         ────────────────           ──────────────────────────────
+  page 1 → 1000 names ──send──►  [name, name, ...]  ◄──recv──  DeleteObject(name)
+  page 2 → 1000 names ──send──►  backpressure here  ◄──recv──  DeleteObject(name)
+  page 3 → ...         (blocks if full)              ◄──recv──  ...
+```
+
+Key properties:
+
+- **Constant memory** — the channel buffer holds at most 5,000 object names
+  regardless of total object count. A prefix with 100 billion objects uses
+  the same memory as one with 1,000.
+- **Deletes start immediately** — workers begin deleting as soon as the first
+  LIST page (1,000 names) arrives; there is no wait-for-full-enumeration phase.
+- **Natural backpressure** — if delete workers fall behind, the channel fills
+  and the lister goroutine blocks on the next send. The lister can never get
+  more than 5 pages (5,000 names) ahead of the workers.
+- **Error safety** — a LIST error mid-run is captured and surfaced after all
+  in-flight deletes complete; up to 5 delete errors are printed inline.
+
+### Cleanup CLI flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--bucket` | *(required)* | GCS bucket name |
+| `--object-prefix` | *(required)* | Object name prefix to delete (e.g. `resnet50/`) |
+| `--concurrency` | `64` | Number of concurrent DELETE goroutines |
+| `--dry-run` | `false` | List what would be deleted without issuing any DELETEs |
+| `--key-file` | ADC | Path to service account key JSON |
+| `--endpoint` | GCS default | Custom GCS endpoint (for proxies / testing) |
+| `--rapid-mode` | `off` | RAPID/zonal bucket mode: `auto`, `on`, or `off` |
+
+> **Note:** Deleting an entire bucket (empty `--object-prefix`) is intentionally
+> not supported. You must specify a non-empty prefix to guard against accidental
+> bucket-wide deletion.
+
+### Cleanup examples
+
+```bash
+# Delete everything under resnet50/ (64 concurrent deletes)
+gcs-bench cleanup --bucket my-bucket --object-prefix resnet50/
+
+# Same using the 'delete' alias
+gcs-bench delete --bucket my-bucket --object-prefix resnet50/
+
+# Preview what would be deleted (no actual DELETEs)
+gcs-bench cleanup --bucket my-bucket --object-prefix resnet50/ --dry-run
+
+# Higher concurrency for large prefix
+gcs-bench cleanup --bucket my-bucket --object-prefix resnet50/ --concurrency 256
+
+# Use a service account key
+gcs-bench cleanup --bucket my-bucket --object-prefix resnet50/ \
+    --key-file /path/to/key.json
+
+# Clean a single host's shard of a distributed benchmark
+gcs-bench cleanup --bucket my-bucket --object-prefix resnet50/host-2/
+```
+
+### Sample progress output
+
+```
+[cleanup] Starting producer/consumer cleanup of gs://my-bucket/resnet50/
+[cleanup] delete-workers=64  list-page=1000  channel-buffer=5000 (max ~5000 names in memory)
+
+[cleanup] elapsed=5s   listed=18000  deleted=15200  3040/s  queue=2800  errs=0
+[cleanup] elapsed=10s  listed=36000  deleted=33400  3640/s  queue=2600  errs=0
+[cleanup] elapsed=15s  listed=50176  deleted=49100  3140/s  queue=1076  errs=0
+[cleanup] COMPLETE — deleted 50176/50176 objects  elapsed=17s  avg=2951/s  errs=0
+```
+
+Progress fields:
+
+| Field | Meaning |
+|-------|---------|
+| `listed=N` | Objects seen in LIST responses so far |
+| `deleted=D` | Objects successfully deleted so far |
+| `R/s` | Delete throughput over the last 5-second interval |
+| `queue=N-D` | Names in the channel buffer (backpressure indicator) |
+| `errs=E` | Cumulative delete errors |
+
+### Multi-host cleanup
+
+For distributed benchmarks where each host writes to its own sub-prefix, you
+can clean all hosts in parallel:
+
+```bash
+# Clean each host shard in parallel
+for HOST in 0 1 2 3; do
+    gcs-bench cleanup \
+        --bucket my-bucket \
+        --object-prefix "resnet50/host-${HOST}/" \
+        --concurrency 128 &
+done
+wait
+echo 'All shards cleaned.'
+
+# Or clean the entire benchmark prefix in one call
+gcs-bench cleanup --bucket my-bucket --object-prefix resnet50/ --concurrency 256
 ```

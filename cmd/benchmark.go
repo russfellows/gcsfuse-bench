@@ -228,6 +228,10 @@ func newBenchmarkRootCmd() *cobra.Command {
 			case "on":
 				// Force bidi-gRPC; skip GetStorageLayout.
 				storageClientConfig.ForceZonal = true
+				// Multiple gRPC connections allow concurrent BidiWriteObject streams to
+				// spread across separate HTTP/2 channels, avoiding head-of-line blocking
+				// on a single connection's congestion window.
+				storageClientConfig.GrpcConnPoolSize = 4
 				finalizeForRapid = true
 				logger.Infof("RAPID mode: on (bidi-gRPC forced, skipping detection)\n")
 				if verbosity >= 1 {
@@ -237,6 +241,8 @@ func newBenchmarkRootCmd() *cobra.Command {
 				// Enable the storage control client so GetStorageLayout can detect
 				// whether this is a RAPID/zonal bucket.
 				storageClientConfig.EnableHNS = true
+				// Pre-configure pool in case detection confirms zonal; no-op for non-zonal.
+				storageClientConfig.GrpcConnPoolSize = 4
 				finalizeForRapid = true // no-op for non-zonal buckets
 				logger.Infof("RAPID mode: auto (detecting bucket type via GetStorageLayout)\n")
 				if verbosity >= 1 {

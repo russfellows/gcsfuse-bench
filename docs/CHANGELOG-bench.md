@@ -10,6 +10,84 @@ Use `./gcs-bench --version` to confirm.
 
 ---
 
+## v1.2.3 — Cleanup / delete subcommand, prepare retry tracking, prepare data reporting, RAPID write performance
+
+### New features
+
+- **`gcs-bench cleanup` / `gcs-bench delete` subcommand** — deletes all objects
+  under a GCS prefix using a streaming producer/consumer pipeline. The LIST
+  goroutine pages through GCS and feeds names into a bounded channel (5,000-name
+  buffer); a pool of delete workers (default 64) consumes from the channel
+  simultaneously. Deletes begin as soon as the first LIST page arrives.
+
+  Key properties:
+  - **Constant memory** — channel buffer is capped at 5,000 names regardless of
+    total object count; a 100-billion-object prefix uses the same memory as one
+    with 1,000 objects.
+  - **Natural backpressure** — the lister blocks when the channel is full, so it
+    can never get more than 5 pages ahead of the workers.
+  - **`--dry-run` mode** — lists and counts objects without issuing any DELETEs.
+  - **`gcs-bench delete` alias** — either name works identically:
+    ```bash
+    gcs-bench cleanup --bucket my-bucket --object-prefix resnet50/
+    gcs-bench delete  --bucket my-bucket --object-prefix resnet50/
+    ```
+  - Progress printed every 5 seconds:
+    ```
+    [cleanup] elapsed=10s  listed=36000  deleted=33400  3640/s  queue=2600  errs=0
+    [cleanup] COMPLETE — deleted 50176/50176 objects  elapsed=17s  avg=2951/s  errs=0
+    ```
+  - See [docs/bench-user-guide.md §14](bench-user-guide.md#14-cleanup--delete--removing-benchmark-objects)
+    for full documentation.
+
+- **Prepare-mode retry tracking** — transient write failures are retried up to 5
+  times with exponential backoff (500 ms → 8 s). Retries are counted and shown
+  on the progress line and in the final summary:
+  ```
+  [prepare] track="resnet50"  COMPLETE — objects created: 50176/50176  data written: 9.88 GiB  elapsed=3m12s  avg=261/s  retries=3  errs=0
+  ```
+
+- **Prepare total-bytes reporting** — the prepare completion line and result YAML
+  now always include the total amount of data written (`data written: X GiB/MiB`),
+  visible without any `-v` flag.
+
+### No breaking changes
+
+All existing benchmark configs and result files remain compatible. The new
+`cleanup`/`delete` subcommand is additive. The `Retries` and `TotalBytes` fields
+added to `TrackStats` are zero for benchmark (non-prepare) runs and zero-valued
+in existing YAML files if absent.
+
+### Performance improvements (RAPID/Zonal storage)
+
+Root-cause analysis of write latency for RAPID/Zonal buckets revealed two
+independent bottlenecks.  Both are fixed in this release.
+
+- **Zero-copy writes for small objects** (`internal/storage/bucket_handle.go`) —
+  When writing to a zonal bucket, the gRPC writer previously allocated a **16 MiB
+  buffer per object** regardless of actual object size (the library's default
+  `ChunkSize`). For the typical lognormal workload (64 KB–1 MB, median ~128 KB)
+  this meant 16 MiB of heap per goroutine with no data in it — at 64 goroutines
+  that is 1 GiB of live heap from write buffers alone, causing heavy GC pressure
+  and latency spikes.
+
+  Fix: `wc.ChunkSize = 0` is set for all zonal writes.  This enables
+  `forceOneShot` mode in the gRPC writer: the 16 MiB buffer is never allocated,
+  and the object data flows directly into a single `BidiWriteObject` gRPC message
+  without an intermediate copy.
+
+- **gRPC connection pool for concurrent writes** (`cmd/benchmark.go`,
+  `cmd/cleanup.go`) — `GrpcConnPoolSize` was never set, so all goroutines shared
+  a single gRPC connection (one HTTP/2 channel).  Under high write concurrency
+  every `BidiWriteObject` stream competed for the same connection's congestion
+  window.
+
+  Fix: `GrpcConnPoolSize = 4` is set when `rapid-mode` is `on` or `auto`.  Writes
+  are spread across four independent TCP connections, quadrupling the effective
+  bandwidth-delay product available for concurrent uploads.
+
+---
+
 ## v1.2.2 — Live performance stats, verbosity cleanup, accurate OS memory annotations
 
 ### Improvements
