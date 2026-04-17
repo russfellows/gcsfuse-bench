@@ -177,9 +177,11 @@ func newBenchmarkRootCmd() *cobra.Command {
 			var logBuf bytes.Buffer
 
 			// --- Configure logging ---
+			// Progress lines (ops/s, MiB/s, p50/p99 latency) are always printed to
+			// stderr regardless of log level (bypasses logger severity filter).
 			// Default: WARN (only errors/warnings visible).
-			// -v:   INFO  — phase transitions, prepare progress
-			// -vv:  DEBUG — per-object errors, retry detail
+			// -v:   INFO  — phase transitions, RAPID detection, DirectPath, pool stats
+			// -vv:  DEBUG — Go heap/GC/CPU/RSS/page-cache per interval; pool stalls
 			// -vvv: TRACE — every individual GCS call
 			logSeverity := cfg.LogSeverity(cfg.WARNING)
 			switch {
@@ -356,7 +358,7 @@ func newBenchmarkRootCmd() *cobra.Command {
 	rootCmd.Flags().IntVar(&numWorkers, "num-workers", 1, "Total number of workers in a distributed run; partitions prepare-mode writes")
 	rootCmd.Flags().Int64Var(&startAt, "start-at", 0, "Unix epoch timestamp to sleep until before starting (synchronized multi-worker start)")
 	rootCmd.Flags().StringVar(&rapidMode, "rapid-mode", "", "RAPID/zonal bucket handling: auto (detect via GetStorageLayout), on (force bidi-gRPC), off (HTTP/2 only)")
-	rootCmd.Flags().CountVarP(&verbosity, "verbose", "v", "Increase log verbosity: -v=INFO, -vv=DEBUG, -vvv=TRACE")
+	rootCmd.Flags().CountVarP(&verbosity, "verbose", "v", "Increase log verbosity: -v=INFO (phase transitions, pool stats), -vv=DEBUG (heap/GC/CPU/RSS), -vvv=TRACE (every GCS call). Progress lines (ops/s, MiB/s, p50/p99) are always shown.")
 
 	return rootCmd
 }

@@ -1467,7 +1467,23 @@ All output is in plain-text format (never JSON) regardless of verbosity level.
 ./gcs-bench bench --config bench.yaml -vvv 2>&1 | tee gcs-trace.log
 ```
 
+### Sample default output (no flags)
+
+```
+Warming up for 30s...
+[warmup] track="unet3d-read"  elapsed=10s  remaining=20s  ops=13334  1333/s  9.2 MiB/s  p50=7.4ms  p99=22.1ms  errs=0
+[warmup] track="unet3d-read"  elapsed=20s  remaining=10s  ops=28046  1471/s  9.8 MiB/s  p50=7.2ms  p99=20.8ms  errs=0
+Measuring for 5m0s...
+[bench] track="unet3d-read"  elapsed=10s  remaining=4m50s  ops=15690  1569/s  10.6 MiB/s  p50=6.8ms  p99=19.4ms  errs=0
+[bench] track="unet3d-read"  elapsed=20s  remaining=4m40s  ops=31804  1611/s  10.7 MiB/s  p50=6.7ms  p99=19.1ms  errs=0
+[bench] track="unet3d-read"  elapsed=30s  remaining=4m30s  ops=47914  1610/s  10.9 MiB/s  p50=6.6ms  p99=18.8ms  errs=0
+...
+```
+
 ### Sample `-v` output
+
+Adds RAPID detection, DirectPath verification, phase-transition messages, and
+write pool pipeline stats to the default progress lines:
 
 ```
 RAPID mode: auto (detecting bucket type via GetStorageLayout)
@@ -1485,12 +1501,11 @@ RAPID mode: CONFIRMED — bucket "my-rapid-bucket" is zonal; bidi-gRPC (RAPID) t
   Pre-flight: PASSED — benchmark should work.
 
 Warming up for 30s...
-[warmup] track="unet3d-read"  interval-ops=13334  interval-throughput=8.97 GiB/s  total-ops=13334
-[warmup] track="unet3d-read"  interval-ops=14712  interval-throughput=9.80 GiB/s  total-ops=28046
+[warmup] track="unet3d-read"  elapsed=10s  remaining=20s  ops=13334  1333/s  9.2 MiB/s  p50=7.4ms  p99=22.1ms  errs=0
+[warmup] track="unet3d-read"  elapsed=20s  remaining=10s  ops=28046  1471/s  9.8 MiB/s  p50=7.2ms  p99=20.8ms  errs=0
 Measuring for 5m0s...
-[bench] track="unet3d-read"  interval-ops=15690  interval-throughput=10.62 GiB/s  total-ops=15690
-[bench] track="unet3d-read"  interval-ops=16114  interval-throughput=10.66 GiB/s  total-ops=31804
-[bench] track="unet3d-read"  interval-ops=16110  interval-throughput=10.87 GiB/s  total-ops=47914
+[bench] track="unet3d-read"  elapsed=10s  remaining=4m50s  ops=15690  1569/s  10.6 MiB/s  p50=6.8ms  p99=19.4ms  errs=0
+[bench] track="unet3d-read"  elapsed=20s  remaining=4m40s  ops=31804  1611/s  10.7 MiB/s  p50=6.7ms  p99=19.1ms  errs=0
 ...
 ```
 

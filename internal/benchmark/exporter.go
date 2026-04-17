@@ -333,15 +333,20 @@ func printHumanSummary(w io.Writer, summary RunSummary) {
 			fmt.Fprintf(w, "    Active total:    %.1f%%\n", rt.SystemCPUPercent)
 		}
 		if rt.StartCachedKiB > 0 || rt.EndCachedKiB > 0 {
-			fmt.Fprintf(w, "  System memory (/proc/meminfo + /proc/vmstat):\n")
+			// NOTE: these are Linux kernel memory counters for local disk/file I/O.
+			// GCS data travels network → socket buffer → Go heap (anon pages) and
+			// never enters the file-backed page cache. Page-cache growth here
+			// reflects OS background activity (mapped libraries, results files, etc.),
+			// not GCS object data. Anon-page growth tracks Go heap expansion.
+			_, _ = fmt.Fprintf(w, "  OS memory (Linux page cache — local disk/file activity only; GCS data does not enter page cache):\n")
 			fmt.Fprintf(w, "    Page cache (start): %s\n", humanBytes(float64(rt.StartCachedKiB)*1024))
-			fmt.Fprintf(w, "    Page cache (end):   %s  (Δ%+.0f MiB)  — non-zero delta = disk reads occurred\n",
+			_, _ = fmt.Fprintf(w, "    Page cache (end):   %s  (Δ%+.0f MiB)\n",
 				humanBytes(float64(rt.EndCachedKiB)*1024), float64(rt.EndCachedKiB-rt.StartCachedKiB)/1024)
 			fmt.Fprintf(w, "    Anon pages (start): %s\n", humanBytes(float64(rt.StartAnonPagesKiB)*1024))
-			fmt.Fprintf(w, "    Anon pages (end):   %s  (Δ%+.0f MiB)\n",
+			_, _ = fmt.Fprintf(w, "    Anon pages (end):   %s  (Δ%+.0f MiB)  — tracks Go heap growth\n",
 				humanBytes(float64(rt.EndAnonPagesKiB)*1024), float64(rt.EndAnonPagesKiB-rt.StartAnonPagesKiB)/1024)
-			fmt.Fprintf(w, "    Disk pgpgin:        %d pages  — non-zero = page cache was a data source\n", rt.PgpginDelta)
-			fmt.Fprintf(w, "    Disk pgpgout:       %d pages\n", rt.PgpgoutDelta)
+			_, _ = fmt.Fprintf(w, "    Disk pgpgin:        %d pages  — local disk reads by the OS kernel\n", rt.PgpginDelta)
+			_, _ = fmt.Fprintf(w, "    Disk pgpgout:       %d pages  — OS evicting file-backed pages (normal memory reclaim)\n", rt.PgpgoutDelta)
 		}
 	}
 

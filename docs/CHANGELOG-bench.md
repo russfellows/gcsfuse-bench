@@ -10,6 +10,46 @@ Use `./gcs-bench --version` to confirm.
 
 ---
 
+## v1.2.2 — Live performance stats, verbosity cleanup, accurate OS memory annotations
+
+### Improvements
+
+- **Live real-time performance stats** (`internal/benchmark/engine.go`) — Every
+  10-second progress line now shows the full picture with no flags required:
+  ```
+  [bench] track="resnet50-read"  elapsed=30s  remaining=4m30s  ops=34812  1164/s  28.3 MiB/s  p50=2.1ms  p99=18.4ms  errs=0
+  ```
+  Previously the line showed only `interval-ops` and `GiB/s`; latency and
+  per-second rates were hidden behind `-vv`.
+
+- **Verbosity levels restructured** — Output is now tiered by usefulness:
+  - *(no flags)* — progress lines always: `ops`, `ops/s`, `MiB/s`, `p50`/`p99` ms, `errs`
+  - `-v` (INFO) — adds RAPID detection, DirectPath verification, phase-transition
+    messages, write-pool pipeline health stats per tick
+  - `-vv` (DEBUG) — adds Go heap/GC cycles, per-interval CPU percentages, process
+    RSS, OS page-cache and anon-page deltas (`[os-mem]` lines)
+  - `-vvv` (TRACE) — every individual GCS call (unchanged)
+
+- **Throughput units changed from GiB/s to MiB/s** in progress lines — better
+  scaled for typical GCS object sizes (KiB–MiB range).
+
+### Bug fixes / Clarifications
+
+- **OS memory section relabeled** (`internal/benchmark/exporter.go`) — The
+  "System memory" block in results output previously carried annotations that
+  implied Linux page-cache hits could be serving GCS object data, which is
+  incorrect.  GCS reads travel network → socket buffer → Go heap (anon pages)
+  and never enter the file-backed page cache.  The section is now headed:
+  > *OS memory (Linux page cache — local disk/file activity only; GCS data does not enter page cache)*
+  with accurate per-field annotations: anon-page growth = Go heap expansion;
+  `pgpgout` = normal OS memory reclaim; `pgpgin` = local disk reads by kernel.
+
+- **Updated `docs/bench-user-guide.md` section 12** — Verbosity table and
+  sample output blocks updated to match new level breakdown; added "Sample
+  default output (no flags)" block alongside existing `-v`/`-vvv` samples.
+
+---
+
 ## v1.2.1 — `--bucket` CLI flag, examples directory, thread-curve sweep script
 
 ### New features
