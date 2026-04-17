@@ -104,7 +104,7 @@ func writeTSV(summary RunSummary, path string, notify io.Writer) error {
 	w.Comma = '\t'
 
 	header := []string{
-		"track", "goroutines", "ops_total", "errors", "ops_per_sec", "throughput_mib_s", "avg_op_size_bytes",
+		"track", "goroutines", "ops_total", "errors", "retries", "total_bytes", "ops_per_sec", "throughput_mib_s", "avg_op_size_bytes",
 		"ttfb_p50_us", "ttfb_p90_us", "ttfb_p95_us", "ttfb_p99_us", "ttfb_p999_us", "ttfb_max_us", "ttfb_mean_us",
 		"total_p50_us", "total_p90_us", "total_p95_us", "total_p99_us", "total_p999_us", "total_max_us", "total_mean_us",
 	}
@@ -118,6 +118,8 @@ func writeTSV(summary RunSummary, path string, notify io.Writer) error {
 			strconv.Itoa(t.Goroutines),
 			strconv.FormatInt(t.TotalOps, 10),
 			strconv.FormatInt(t.Errors, 10),
+			strconv.FormatInt(t.Retries, 10),
+			strconv.FormatInt(t.TotalBytes, 10),
 			strconv.FormatFloat(t.OpsPerSec, 'f', 2, 64),
 			strconv.FormatFloat(t.ThroughputBytesPerSec/float64(1<<20), 'f', 3, 64),
 			strconv.FormatFloat(t.AvgOpSizeBytes, 'f', 1, 64),
@@ -266,8 +268,15 @@ func printHumanSummary(w io.Writer, summary RunSummary) {
 		fmt.Fprintf(w, "\n--- Track: %s (%s) ---\n\n", t.TrackName, opLabel)
 		fmt.Fprintf(w, "  Threads:          %d goroutines\n", t.Goroutines)
 		fmt.Fprintf(w, "  Throughput:       %s\n", humanThroughput(t.ThroughputBytesPerSec))
+		if t.TotalBytes > 0 {
+			_, _ = fmt.Fprintf(w, "  Total data:       %s\n", humanBytes(float64(t.TotalBytes)))
+		}
 		fmt.Fprintf(w, "  Ops/sec:          %s  (%s total, %s errors)\n",
 			commaFloat(t.OpsPerSec, 2), commaInt(t.TotalOps), commaInt(t.Errors))
+		if t.Retries > 0 {
+			_, _ = fmt.Fprintf(w, "  Retries:          %s  (transient failures retried successfully or exhausted)\n",
+				commaInt(t.Retries))
+		}
 		fmt.Fprintf(w, "  Avg object size:  %s\n", humanBytes(t.AvgOpSizeBytes))
 		// Cross-check: ops/s × avg-size must equal Throughput. Divergence indicates
 		// a counting bug (e.g. totalBytes and totalOps out of sync).

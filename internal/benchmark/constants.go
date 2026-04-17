@@ -143,6 +143,14 @@ const benchProgressInterval = 10 * time.Second
 // still giving the operator the first few diagnostic messages.
 const writeErrorLogLimit int64 = 3
 
+// prepareMaxRetries is the maximum number of times a single prepare write is
+// retried after a transient failure before being counted as a permanent error.
+const prepareMaxRetries = 5
+
+// prepareRetryBaseDelay is the initial backoff delay for prepare write retries.
+// Subsequent retries use exponential backoff: base, 2×base, 4×base, …
+const prepareRetryBaseDelay = 500 * time.Millisecond
+
 // ── Worker seeding ───────────────────────────────────────────────────────────
 
 // workerRNGSeedStride is the per-worker offset applied when seeding

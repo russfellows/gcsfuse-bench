@@ -49,6 +49,8 @@ const gcsBenchUsage = `gcs-bench — GCS I/O benchmark tool
 USAGE:
   gcs-bench bench          [--config <file>] [flags]   Run a storage benchmark
   gcs-bench benchmark      [--config <file>] [flags]   Alias for 'bench'
+  gcs-bench cleanup        --bucket BUCKET --object-prefix PREFIX [flags]  Delete objects under a prefix
+  gcs-bench delete         --bucket BUCKET --object-prefix PREFIX [flags]  Alias for 'cleanup'
   gcs-bench merge-results  <worker0.yaml> ...          Merge distributed results
   gcs-bench plot-hgrm      <file.hgrm> ...             Plot .hgrm latency distribution as SVG
   gcs-bench datagen-bench  [flags]                     Benchmark Xoshiro256++ CPU scaling
@@ -120,6 +122,10 @@ argScan:
 		case "bench", "benchmark":
 			os.Args = append(os.Args[:i], os.Args[i+1:]...)
 			cmd.ExecuteBenchmarkCmd()
+			return
+		case "cleanup", "delete":
+			os.Args = append(os.Args[:i], os.Args[i+1:]...)
+			cmd.ExecuteCleanupCmd()
 			return
 		case "merge-results":
 			os.Args = append(os.Args[:i], os.Args[i+1:]...)

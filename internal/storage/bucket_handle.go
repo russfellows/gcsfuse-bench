@@ -199,6 +199,12 @@ func (bh *bucketHandle) CreateObject(ctx context.Context, req *gcs.CreateObjectR
 	wc.ProgressFunc = req.CallBack
 	// All objects in zonal buckets must be appendable.
 	wc.Append = bh.BucketType().Zonal
+	if bh.BucketType().Zonal {
+		// For zonal/RAPID buckets the gRPC writer is used (Append=true forces gRPC).
+		// Setting ChunkSize=0 enables forceOneShot mode: no 16 MiB buffer is allocated
+		// per write, which eliminates GC pressure when writing many small objects.
+		wc.ChunkSize = 0
+	}
 	// Objects in zonal buckets should not be finalized by default. Finalize them if finalizeFileForRapid is set to true.
 	// When writer.Append is false,then this parameter is anyways ignored.
 	// Refer: https://github.com/googleapis/google-cloud-go/blob/main/storage/writer.go#L135

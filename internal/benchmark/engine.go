@@ -95,6 +95,11 @@ type Engine struct {
 	// out is the writer for live progress lines ([warmup]/[bench] ticks).
 	// Defaults to os.Stderr when nil is passed to NewEngine.
 	out io.Writer
+
+	// prepareRetryDelay is the base backoff delay between retries in prepare
+	// mode. Zero means use the package-level prepareRetryBaseDelay constant.
+	// Tests may set this to a small value to avoid sleeping.
+	prepareRetryDelay time.Duration
 }
 
 // mrdCacheSize is the maximum number of MultiRangeDownloader connections held
@@ -115,11 +120,12 @@ func (e *mrdCacheEntry) Size() uint64 { return 1 }
 
 // trackState holds mutable per-track counters and histograms.
 type trackState struct {
-	cfg        cfg.BenchmarkTrack
-	hists      *TrackHistograms
-	totalOps   atomic.Int64
-	totalErrs  atomic.Int64
-	totalBytes atomic.Int64
+	cfg          cfg.BenchmarkTrack
+	hists        *TrackHistograms
+	totalOps     atomic.Int64
+	totalErrs    atomic.Int64
+	totalRetries atomic.Int64
+	totalBytes   atomic.Int64
 
 	// objectPaths is the pre-built list of all object names for this track.
 	// Built from DirectoryStructure if set, otherwise from flat ObjectCount.
@@ -314,6 +320,7 @@ func (e *Engine) Run(ctx context.Context) (RunSummary, error) {
 		for tIdx, ts := range e.trackState {
 			ops := ts.totalOps.Load()
 			errs := ts.totalErrs.Load()
+			retr := ts.totalRetries.Load()
 			byts := ts.totalBytes.Load()
 			var opsPerSec, throughput float64
 			if prepElapsed > 0 {
@@ -333,6 +340,8 @@ func (e *Engine) Run(ctx context.Context) (RunSummary, error) {
 				Goroutines:            goroutinesForTrack(e.bCfg, tIdx),
 				TotalOps:              ops,
 				Errors:                errs,
+				Retries:               retr,
+				TotalBytes:            byts,
 				ThroughputBytesPerSec: throughput,
 				OpsPerSec:             opsPerSec,
 				AvgOpSizeBytes:        avgOpSize,
@@ -507,6 +516,7 @@ func (e *Engine) Run(ctx context.Context) (RunSummary, error) {
 			Goroutines:            goroutinesForTrack(e.bCfg, i),
 			TotalOps:              ops,
 			Errors:                errs,
+			TotalBytes:            bytes,
 			ThroughputBytesPerSec: throughput,
 			OpsPerSec:             opsPerSec,
 			AvgOpSizeBytes:        avgOpSize,
@@ -1162,49 +1172,71 @@ func (e *Engine) runPrepare(ctx context.Context) error {
 				ts.cfg.Name, total, concurrency)
 		}
 
-		var written, writeErrs atomic.Int64
+		var written, writeErrs, retries atomic.Int64
 		start := time.Now()
 
 		// Progress reporter — cancelled explicitly after wg.Wait().
+		// Uses the same output style as startProgressReporter: always written to
+		// e.out (bypasses log-level filter), MiB/s throughput, p50/p99 latency
+		// from the track histogram, pool stats at -v, heap/GC at -vv.
 		progressCtx, progressCancel := context.WithCancel(ctx)
 		go func(total int, ts *trackState) {
 			ticker := time.NewTicker(prepareProgressInterval)
 			defer ticker.Stop()
-			var lastBytes int64
+			type snap struct{ bytes, ops int64 }
+			var last snap
 			lastAt := time.Now()
 			var lastPool PoolStats
 			if e.writePool != nil {
 				lastPool = e.writePool.Stats()
 			}
+			lastProcCPU, _ := readProcCPU()
+			lastSysCPU, _ := readSystemCPU()
+			lastMem := readSysMemInfo()
+			lastVM := readVMStat()
+			lastRSS := readCurrentRSSKiB()
+			var lastGCCycles uint64
 			for {
 				select {
 				case <-ticker.C:
 					now := time.Now()
-					n := written.Load()
+					cur := snap{bytes: ts.totalBytes.Load(), ops: ts.totalOps.Load()}
 					errs := writeErrs.Load()
-					curBytes := ts.totalBytes.Load()
-					elapsed := time.Since(start).Seconds()
 					intervalSecs := now.Sub(lastAt).Seconds()
-					rate := float64(n) / elapsed
-					pct := float64(n) / float64(total) * 100
-					var tputGiB float64
-					if intervalSecs > 0 {
-						tputGiB = float64(curBytes-lastBytes) / intervalSecs / bytesPerGiB
-					}
-					logger.Infof("  [prepare] %d/%d (%.0f%%)  %.0f obj/s  %.2f GiB/s  %d errors\n",
-						n, total, pct, rate, tputGiB, errs)
-					lastBytes = curBytes
+					elapsed := time.Since(start)
+					dBytes := float64(cur.bytes - last.bytes)
+					dOps := cur.ops - last.ops
+					last = cur
 					lastAt = now
 
-					// Pool producer/consumer breakdown after each progress line.
-					if e.writePool != nil && intervalSecs > 0 {
+					n := written.Load()
+					pct := float64(n) / float64(total) * 100
+					opsPerSec := float64(dOps) / intervalSecs
+					var tputMiB float64
+					if intervalSecs > 0 {
+						tputMiB = (dBytes / intervalSecs) / (bytesPerGiB / 1024)
+					}
+
+					// Snapshot latency percentiles non-destructively.
+					// Values are in microseconds; convert to milliseconds for display.
+					_, totalPerc := ts.hists.Snapshot()
+					p50ms := totalPerc.P50 / 1000.0
+					p99ms := totalPerc.P99 / 1000.0
+					retr := retries.Load()
+
+					_, _ = fmt.Fprintf(e.out, "[prepare] track=%q  elapsed=%s  done=%d/%d (%.0f%%)  %.0f/s  %.1f MiB/s  p50=%.1fms  p99=%.1fms  retries=%d  errs=%d\n",
+						ts.cfg.Name, elapsed.Round(time.Second),
+						n, total, pct, opsPerSec, tputMiB, p50ms, p99ms, retr, errs)
+
+					// Pool pipeline health at verbosity >= 1 (-v).
+					if e.writePool != nil && e.verbosity >= 1 && intervalSecs > 0 {
 						pCur := e.writePool.Stats()
 						dProd := float64(pCur.BytesProduced - lastPool.BytesProduced)
 						dCons := float64(pCur.BytesConsumed - lastPool.BytesConsumed)
 						dFillNs := float64(pCur.TotalFillNs - lastPool.TotalFillNs)
 						numProducers := pCur.NumProducers
-						prodGiB := dProd / intervalSecs / bytesPerGiB
-						consGiB := dCons / intervalSecs / bytesPerGiB
+						prodGiB := (dProd / intervalSecs) / bytesPerGiB
+						consGiB := (dCons / intervalSecs) / bytesPerGiB
 						var headroom float64
 						intervalNs := intervalSecs * nanosPerSecond
 						if dFillNs > 0 && dProd > 0 {
@@ -1225,6 +1257,52 @@ func (e *Engine) runPrepare(ctx context.Context) error {
 								tag, numProducers, prodGiB, consGiB, headroom)
 						}
 					}
+
+					// Heap/GC/CPU/OS-memory at verbosity >= 2 (-vv).
+					if e.verbosity >= 2 {
+						samples := []runtimemetrics.Sample{
+							{Name: "/memory/classes/heap/objects:bytes"},
+							{Name: "/gc/cycles/total:gc-cycles"},
+						}
+						runtimemetrics.Read(samples)
+						heapBytes := samples[0].Value.Uint64()
+						gcCyclesNow := samples[1].Value.Uint64()
+						gcCyclesDelta := gcCyclesNow - lastGCCycles
+						lastGCCycles = gcCyclesNow
+
+						curProcCPU, procErr := readProcCPU()
+						curSysCPU, sysErr := readSystemCPU()
+						if procErr == nil && sysErr == nil {
+							sysTotalDelta := float64(curSysCPU.total()) - float64(lastSysCPU.total())
+							if sysTotalDelta > 0 {
+								procUserPct := float64(curProcCPU.userTicks-lastProcCPU.userTicks) / sysTotalDelta * 100
+								procSysPct := float64(curProcCPU.sysTicks-lastProcCPU.sysTicks) / sysTotalDelta * 100
+								sysIOWaitPct := float64(curSysCPU.iowait-lastSysCPU.iowait) / sysTotalDelta * 100
+								logger.Infof("[runtime] heap=%s  gc/interval=%d  proc-user=%.1f%%  proc-sys=%.1f%%  sys-iowait=%.1f%%\n",
+									humanBytes(float64(heapBytes)), gcCyclesDelta, procUserPct, procSysPct, sysIOWaitPct)
+							} else {
+								logger.Infof("[runtime] heap=%s  gc/interval=%d\n",
+									humanBytes(float64(heapBytes)), gcCyclesDelta)
+							}
+							lastProcCPU = curProcCPU
+							lastSysCPU = curSysCPU
+						} else {
+							logger.Infof("[runtime] heap=%s  gc/interval=%d\n",
+								humanBytes(float64(heapBytes)), gcCyclesDelta)
+						}
+						curMem := readSysMemInfo()
+						curVM := readVMStat()
+						curRSS := readCurrentRSSKiB()
+						pgpginDelta := curVM.pgpgin - lastVM.pgpgin
+						logger.Infof("[os-mem] proc-rss=%s (Δ%+.0f MiB)  page-cache=%s (Δ%+.0f MiB, local disk only)  anon=%s (Δ%+.0f MiB, heap growth)  pgpgin-δ=%d\n",
+							humanBytes(float64(curRSS)*1024), float64(curRSS-lastRSS)/1024,
+							humanBytes(float64(curMem.cachedKiB)*1024), float64(curMem.cachedKiB-lastMem.cachedKiB)/1024,
+							humanBytes(float64(curMem.anonPagesKiB)*1024), float64(curMem.anonPagesKiB-lastMem.anonPagesKiB)/1024,
+							pgpginDelta)
+						lastMem = curMem
+						lastVM = curVM
+						lastRSS = curRSS
+					}
 				case <-progressCtx.Done():
 					return
 				}
@@ -1242,11 +1320,35 @@ func (e *Engine) runPrepare(ctx context.Context) error {
 					if ctx.Err() != nil {
 						return
 					}
-					if err := e.doWrite(ctx, ts, rng, shardPaths[i]); err != nil {
+					var writeErr error
+					baseDelay := e.prepareRetryDelay
+					if baseDelay == 0 {
+						baseDelay = prepareRetryBaseDelay
+					}
+					delay := baseDelay
+					for attempt := 0; attempt <= prepareMaxRetries; attempt++ {
+						if attempt > 0 {
+							retries.Add(1)
+							ts.totalRetries.Add(1)
+							select {
+							case <-time.After(delay):
+							case <-ctx.Done():
+								return
+							}
+							if delay < 8*time.Second {
+								delay *= 2
+							}
+						}
+						writeErr = e.doWrite(ctx, ts, rng, shardPaths[i])
+						if writeErr == nil {
+							break
+						}
+					}
+					if writeErr != nil {
 						n := writeErrs.Add(1)
 						ts.totalErrs.Add(1)
 						if n <= writeErrorLogLimit {
-							logger.Warnf("[prepare] write error #%d on %q: %s\n", n, shardPaths[i], trimInternalDetails(err))
+							logger.Warnf("[prepare] permanent error on %q after %d retries: %s\n", shardPaths[i], prepareMaxRetries, trimInternalDetails(writeErr))
 						}
 					} else {
 						written.Add(1)
@@ -1261,9 +1363,11 @@ func (e *Engine) runPrepare(ctx context.Context) error {
 		elapsed := time.Since(start)
 		n := written.Load()
 		errs := writeErrs.Load()
-		logger.Infof("[prepare] Track %q: complete — %d/%d written in %s (%.0f obj/s, %d errors)\n",
-			ts.cfg.Name, n, total, elapsed.Round(time.Second),
-			float64(n)/elapsed.Seconds(), errs)
+		retr := retries.Load()
+		bytsWritten := ts.totalBytes.Load()
+		_, _ = fmt.Fprintf(e.out, "[prepare] track=%q  COMPLETE — objects created: %d/%d  data written: %s  elapsed=%s  avg=%.0f/s  retries=%d  errs=%d\n",
+			ts.cfg.Name, n, total, humanBytes(float64(bytsWritten)), elapsed.Round(time.Second),
+			float64(n)/elapsed.Seconds(), retr, errs)
 	}
 	return nil
 }

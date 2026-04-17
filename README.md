@@ -28,11 +28,11 @@ make bench
 
 # Verify
 ./gcs-bench --version
-# gcsfuse version gcsfuse-v3-snap.4b7892bc+bench-v1.2.2 (Go version go1.26.1)
+# gcsfuse version gcsfuse-v3-snap.4b7892bc+bench-v1.2.3 (Go version go1.26.1)
 ```
 
 The `make bench` target injects a meaningful version string automatically.
-To bump your revision: `make bench BENCH_VERSION=v1.3`.
+To bump your revision: `make bench BENCH_VERSION=v1.4`.
 
 ### 2. Validate your config (no GCS traffic)
 

@@ -76,8 +76,18 @@ type TrackStats struct {
 	// TotalOps is the count of completed operations (successes + failures).
 	TotalOps int64
 
-	// Errors is the count of failed operations.
+	// Errors is the count of failed operations (permanent failures after all retries).
 	Errors int64
+
+	// Retries is the count of retried operations (transient failures that were
+	// ultimately successful or that exhausted the retry budget). Only populated
+	// for prepare-mode runs.
+	Retries int64
+
+	// TotalBytes is the total number of bytes transferred during this track.
+	// For prepare-mode (write) tracks this is the sum of GCS-confirmed object
+	// sizes; for read tracks it is the total bytes received from the service.
+	TotalBytes int64
 
 	// ThroughputBytesPerSec is the average bytes/s over the measurement window.
 	ThroughputBytesPerSec float64
