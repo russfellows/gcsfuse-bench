@@ -1417,7 +1417,7 @@ func (e *Engine) startProgressReporter(ctx context.Context, phase string, total 
 					curVM := readVMStat()
 					curRSS := readCurrentRSSKiB()
 					pgpginDelta := curVM.pgpgin - lastVM.pgpgin
-					logger.Infof("[memory] proc-rss=%s (Δ%+.0f MiB)  page-cache=%s (Δ%+.0f MiB)  anon=%s (Δ%+.0f MiB)  pgpgin-δ=%d\n",
+					logger.Infof("[os-mem] proc-rss=%s (Δ%+.0f MiB)  page-cache=%s (Δ%+.0f MiB, local disk only)  anon=%s (Δ%+.0f MiB, heap growth)  pgpgin-δ=%d\n",
 						humanBytes(float64(curRSS)*1024), float64(curRSS-lastRSS)/1024,
 						humanBytes(float64(curMem.cachedKiB)*1024), float64(curMem.cachedKiB-lastMem.cachedKiB)/1024,
 						humanBytes(float64(curMem.anonPagesKiB)*1024), float64(curMem.anonPagesKiB-lastMem.anonPagesKiB)/1024,
