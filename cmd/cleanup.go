@@ -123,7 +123,7 @@ func newCleanupRootCmd() *cobra.Command {
 			}
 
 			if !dryRun && result.Errors > 0 {
-				fmt.Fprintf(os.Stdout, "\nWarning: %d/%d objects could not be deleted. Re-run to retry.\n",
+				_, _ = fmt.Fprintf(os.Stdout, "\nWarning: %d/%d objects could not be deleted. Re-run to retry.\n",
 					result.Errors, result.Listed)
 			}
 			return nil
