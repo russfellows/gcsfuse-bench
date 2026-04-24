@@ -36,7 +36,7 @@ STAGINGVERSION ?= $(_STAGINGVERSION_FALLBACK)
 override STAGINGVERSION := $(STAGINGVERSIONPREFIX)$(patsubst $(STAGINGVERSIONPREFIX)%,%,$(STAGINGVERSION))
 
 PROJECT ?= $(shell gcloud config get-value project 2>/dev/null)
-.DEFAULT_GOAL := build
+.DEFAULT_GOAL := bench
 
 .PHONY: generate imports fmt vet lint build buildTest install test clean-gen clean clean-all build-csi bench bench-test bench-clean
 
