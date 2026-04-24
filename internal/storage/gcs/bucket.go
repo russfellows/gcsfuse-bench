@@ -25,6 +25,11 @@ import (
 type BucketType struct {
 	Hierarchical bool
 	Zonal        bool
+	Pirlo        bool
+}
+
+func (bt BucketType) IsRapid() bool {
+	return bt.Zonal || bt.Pirlo
 }
 
 const (

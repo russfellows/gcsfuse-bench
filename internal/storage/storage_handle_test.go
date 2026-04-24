@@ -171,6 +171,21 @@ func (testSuite *StorageHandleTest) TestBucketHandleWhenBucketDoesNotExistWithNo
 	assert.NotNil(testSuite.T(), err)
 }
 
+func (testSuite *StorageHandleTest) TestLookupBucketType_PirloEnabled() {
+	sc := storageutil.GetDefaultStorageClientConfig(keyFile)
+	sc.ExperimentalEnablePirlo = true
+	sh, err := NewStorageHandle(testSuite.ctx, sc, "")
+	require.NoError(testSuite.T(), err)
+	client := sh.(*storageClient)
+	client.storageControlClient = testSuite.mockClient
+	testSuite.mockStorageLayout(gcs.BucketType{Zonal: true})
+
+	bt, err := client.lookupBucketType(TestBucketName)
+
+	assert.NoError(testSuite.T(), err)
+	assert.True(testSuite.T(), bt.Pirlo)
+}
+
 func (testSuite *StorageHandleTest) TestNewStorageHandleHttp2Disabled() {
 	sc := storageutil.GetDefaultStorageClientConfig(keyFile) // by default http1 enabled
 
@@ -889,6 +904,7 @@ func (testSuite *StorageHandleTest) TestControlClientForBucketHandle() {
 	tests := []struct {
 		name                 string
 		isZonal              bool
+		isPirlo              bool
 		billingProject       string
 		folderAPIStallRetry  bool
 		expectFolderRetries  bool
@@ -904,6 +920,20 @@ func (testSuite *StorageHandleTest) TestControlClientForBucketHandle() {
 		{
 			name:                 "ZonalBucket_WithBillingProject",
 			isZonal:              true,
+			billingProject:       "test-project",
+			expectFolderRetries:  true,
+			expectGaxRetriesUsed: false,
+		},
+		{
+			name:                 "PirloBucket_NoBillingProject",
+			isPirlo:              true,
+			billingProject:       "",
+			expectFolderRetries:  true,
+			expectGaxRetriesUsed: false,
+		},
+		{
+			name:                 "PirloBucket_WithBillingProject",
+			isPirlo:              true,
 			billingProject:       "test-project",
 			expectFolderRetries:  true,
 			expectGaxRetriesUsed: false,
@@ -954,7 +984,7 @@ func (testSuite *StorageHandleTest) TestControlClientForBucketHandle() {
 				rawStorageControlClientWithGaxRetries:    mockRawControlClientWithRetries,
 				clientConfig:                             clientConfig,
 			}
-			bucketType := &gcs.BucketType{Zonal: tc.isZonal}
+			bucketType := &gcs.BucketType{Zonal: tc.isZonal, Pirlo: tc.isPirlo}
 
 			// Act
 			controlClient := sh.controlClientForBucketHandle(bucketType, tc.billingProject)

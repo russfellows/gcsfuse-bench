@@ -386,6 +386,8 @@ params:
       bucket-type-optimization:
         - bucket-type: "zonal"
           value: "DefaultCongestionThreshold()"
+        - bucket-type: "pirlo"
+          value: "DefaultCongestionThreshold()"
 
   - config-path: "file-system.dir-mode"
     flag-name: "dir-mode"
@@ -410,6 +412,8 @@ params:
       bucket-type-optimization:
         - bucket-type: "zonal"
           value: true
+        - bucket-type: "pirlo"
+          value: true
 
   - config-path: "file-system.experimental-enable-dentry-cache"
     flag-name: "experimental-enable-dentry-cache"
@@ -418,6 +422,13 @@ params:
       When enabled, it sets the Dentry cache entry timeout same as metadata-cache-ttl.
       This enables kernel to use cached entry to map the file paths to inodes,
       instead of making LookUpInode calls to GCSFuse.
+    default: false
+    hide-flag: true
+
+  - config-path: "file-system.experimental-enable-pirlo"
+    flag-name: "experimental-enable-pirlo"
+    type: "bool"
+    usage: "Enables support for pirlo."
     default: false
     hide-flag: true
 
@@ -510,6 +521,8 @@ params:
       bucket-type-optimization:
         - bucket-type: "zonal"
           value: "DefaultMaxBackground()"
+        - bucket-type: "pirlo"
+          value: "DefaultMaxBackground()"
 
   - config-path: "file-system.max-read-ahead-kb"
     flag-name: "max-read-ahead-kb"
@@ -524,16 +537,8 @@ params:
       bucket-type-optimization:
         - bucket-type: "zonal"
           value: 16384 # 16 MiB
-
-  - config-path: "file-system.precondition-errors"
-    flag-name: "precondition-errors"
-    type: "bool"
-    usage: >-
-      Throw Stale NFS file handle error in case the object being synced or read
-      from is modified by some other concurrent process. This helps prevent
-      silent data loss or data corruption.
-    hide-flag: true
-    default: true
+        - bucket-type: "pirlo"
+          value: 16384 # 16 MiB
 
   - config-path: "file-system.rename-dir-limit"
     flag-name: "rename-dir-limit"

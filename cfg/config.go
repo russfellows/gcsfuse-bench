@@ -31,11 +31,19 @@ var AllFlagOptimizationRules = map[string]shared.OptimizationRules{"file-system.
 			BucketType: "zonal",
 			Value:      int64(DefaultCongestionThreshold()),
 		},
+		{
+			BucketType: "pirlo",
+			Value:      int64(DefaultCongestionThreshold()),
+		},
 	},
 }, "file-system.enable-kernel-reader": {
 	BucketTypeOptimization: []shared.BucketTypeOptimization{
 		{
 			BucketType: "zonal",
+			Value:      bool(true),
+		},
+		{
+			BucketType: "pirlo",
 			Value:      bool(true),
 		},
 	},
@@ -84,11 +92,19 @@ var AllFlagOptimizationRules = map[string]shared.OptimizationRules{"file-system.
 			BucketType: "zonal",
 			Value:      int64(DefaultMaxBackground()),
 		},
+		{
+			BucketType: "pirlo",
+			Value:      int64(DefaultMaxBackground()),
+		},
 	},
 }, "file-system.max-read-ahead-kb": {
 	BucketTypeOptimization: []shared.BucketTypeOptimization{
 		{
 			BucketType: "zonal",
+			Value:      int64(16384),
+		},
+		{
+			BucketType: "pirlo",
 			Value:      int64(16384),
 		},
 	},
@@ -521,6 +537,8 @@ type FileSystemConfig struct {
 
 	ExperimentalEnableDentryCache bool `yaml:"experimental-enable-dentry-cache"`
 
+	ExperimentalEnablePirlo bool `yaml:"experimental-enable-pirlo"`
+
 	ExperimentalEnableReaddirplus bool `yaml:"experimental-enable-readdirplus"`
 
 	ExperimentalODirect bool `yaml:"experimental-o-direct"`
@@ -542,8 +560,6 @@ type FileSystemConfig struct {
 	MaxBackground int64 `yaml:"max-background"`
 
 	MaxReadAheadKb int64 `yaml:"max-read-ahead-kb"`
-
-	PreconditionErrors bool `yaml:"precondition-errors"`
 
 	RenameDirLimit int64 `yaml:"rename-dir-limit"`
 
@@ -998,6 +1014,12 @@ func BuildFlagSet(flagSet *pflag.FlagSet) error {
 		return err
 	}
 
+	flagSet.BoolP("experimental-enable-pirlo", "", false, "Enables support for pirlo.")
+
+	if err := flagSet.MarkHidden("experimental-enable-pirlo"); err != nil {
+		return err
+	}
+
 	flagSet.BoolP("experimental-enable-readdirplus", "", false, "Enables ReadDirPlus capability")
 
 	if err := flagSet.MarkHidden("experimental-enable-readdirplus"); err != nil {
@@ -1215,12 +1237,6 @@ func BuildFlagSet(flagSet *pflag.FlagSet) error {
 	flagSet.StringSliceP("o", "", []string{}, "Additional system-specific mount options. Multiple options can be passed as comma separated. For readonly, use --o ro")
 
 	flagSet.StringP("only-dir", "", "", "Mount only a specific directory within the bucket. See docs/mounting for more information")
-
-	flagSet.BoolP("precondition-errors", "", true, "Throw Stale NFS file handle error in case the object being synced or read from is modified by some other concurrent process. This helps prevent silent data loss or data corruption.")
-
-	if err := flagSet.MarkHidden("precondition-errors"); err != nil {
-		return err
-	}
 
 	flagSet.StringP("profile", "", "", "The name of the profile to apply. e.g. aiml-training, aiml-serving, aiml-checkpointing")
 
@@ -1593,6 +1609,10 @@ func BindFlags(v *viper.Viper, flagSet *pflag.FlagSet) error {
 		return err
 	}
 
+	if err := v.BindPFlag("file-system.experimental-enable-pirlo", flagSet.Lookup("experimental-enable-pirlo")); err != nil {
+		return err
+	}
+
 	if err := v.BindPFlag("file-system.experimental-enable-readdirplus", flagSet.Lookup("experimental-enable-readdirplus")); err != nil {
 		return err
 	}
@@ -1822,10 +1842,6 @@ func BindFlags(v *viper.Viper, flagSet *pflag.FlagSet) error {
 	}
 
 	if err := v.BindPFlag("only-dir", flagSet.Lookup("only-dir")); err != nil {
-		return err
-	}
-
-	if err := v.BindPFlag("file-system.precondition-errors", flagSet.Lookup("precondition-errors")); err != nil {
 		return err
 	}
 
