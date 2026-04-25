@@ -130,6 +130,14 @@ type BenchmarkTrack struct {
 	// "multirange": uses MultiRangeDownloader with a singleflight-deduped LRU
 	// cache of bidi-gRPC connections, amortizing connection-setup cost across
 	// repeated reads of the same object.
+	// "traditional-parquet": simulates how a traditional object-storage client
+	// reads a Parquet file without negative-offset or MRD support:
+	//   1. HEAD/stat the object to discover its size.
+	//   2. Byte-range GET of the last read-footer-size bytes (footer).
+	//   3. reads-per-object parallel byte-range GETs for random row groups.
+	// Total latency = stat + footer-GET + max(row-group GETs).
+	// Credits reads-per-object samples per op, enabling direct Samples/sec
+	// comparison against read-type: multirange with read-size-min > 0.
 	ReadType string `yaml:"read-type"`
 
 	// ReadSize is the number of bytes requested per individual read call.
@@ -154,6 +162,84 @@ type BenchmarkTrack struct {
 	// SizeSpec controls per-object size distribution for write operations.
 	// When set, it overrides ObjectSizeMin / ObjectSizeMax.
 	SizeSpec *SizeSpecConfig `yaml:"size-spec"`
+
+	// ReadOffset is the byte offset at which to start each read.
+	//
+	//   >= 0: read starting at this byte position (0 = beginning of object).
+	//   < 0:  read starting this many bytes before the end of the object.
+	//         Example: -32768 reads the last 32 KiB (Parquet footer pattern).
+	//         Negative offsets require read-type: multirange; the MRD bidi-gRPC
+	//         stream resolves them to a positive position using the object size.
+	//         Using a negative offset with read-type: new-reader returns an error.
+	//
+	// Ignored when read-offset-random is true.
+	ReadOffset int64 `yaml:"read-offset"`
+
+	// ReadOffsetRandom, when true, picks a uniformly random byte offset for each
+	// read within the safe window [0, object_size - read_size].
+	//
+	// The assumed object size range is taken from object-size-min / object-size-max
+	// (or size-spec min/max when set).  When the window is zero or negative
+	// (object smaller than read-size), offset 0 is used.
+	//
+	// When true, read-offset is ignored.
+	// Supported on both new-reader and multirange read types.
+	ReadOffsetRandom bool `yaml:"read-offset-random"`
+
+	// ReadsPerObject is the number of independent range reads issued per operation
+	// when read-type is multirange.  All reads share the cached bidi-gRPC
+	// connection and are dispatched concurrently; the operation is complete when
+	// the last read callback fires.
+	//
+	// Use this to simulate reading multiple row groups (or column chunks) from a
+	// single Parquet file per training step.  When read-offset-random is true,
+	// each of the N reads picks a different random offset, approximating random
+	// batch access across column chunks in a file.
+	//
+	// Default: 1.  Ignored for read-type: new-reader.
+	ReadsPerObject int `yaml:"reads-per-object"`
+
+	// ReadSizeMin and ReadSizeMax define a per-range random read size when
+	// read-type is multirange.  When ReadSizeMin > 0, the engine switches to the
+	// per-range latency tracking path (doReadMultiRangePerRange):
+	//
+	//   - Each range draws an independent size uniformly from
+	//     [ReadSizeMin, ReadSizeMax].
+	//   - Each range records its own TTFB and total-latency histogram entry.
+	//     The histograms therefore show the per-range distribution; with
+	//     ReadsPerObject: N there are N data points per operation call.
+	//
+	// When ReadSizeMin == ReadSizeMax > 0: fixed per-range size with per-range
+	// latency tracking (no size randomness, but each range gets its own entry).
+	//
+	// When ReadSizeMin <= 0: falls back to ReadSize on the aggregate path
+	// (existing doReadMultiRange behaviour — one histogram entry per operation).
+	//
+	// Note: when read-offset-random is true, the safe-offset window uses
+	// ReadSizeMax (or ReadSize when ReadSizeMax is 0) so that every drawn offset
+	// leaves room for the largest possible range.
+	ReadSizeMin int64 `yaml:"read-size-min"`
+	ReadSizeMax int64 `yaml:"read-size-max"`
+
+	// SamplesPerObject is the number of training samples credited per completed
+	// operation on any non-per-range read path.  When > 0, each op adds this
+	// value to the totalRanges counter so that SamplesPerSec is computed and
+	// printed in the summary — even when read-type is not multirange.
+	//
+	// Use this when a single read delivers multiple samples:
+	//   - Full-object GET of a Parquet file with N row groups → set to N
+	//   - read-type: traditional-parquet → leave at 0 (uses reads-per-object)
+	//
+	// When read-size-min > 0 (doReadMultiRangePerRange path), this field is
+	// ignored; the per-range counter increments by 1 per delivered range.
+	SamplesPerObject int `yaml:"samples-per-object"`
+
+	// ReadFooterSize is the number of bytes read as the "footer" step in the
+	// traditional-parquet read path.  The footer is read as a byte-range GET
+	// ending at the last byte of the object (i.e. [objectSize-ReadFooterSize,
+	// objectSize]).  Defaults to 32768 (32 KiB) if zero when read-type is
+	// traditional-parquet.
+	ReadFooterSize int64 `yaml:"read-footer-size"`
 }
 
 // DirectoryStructureConfig describes a nested object tree for a track.

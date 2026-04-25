@@ -126,6 +126,10 @@ type trackState struct {
 	totalErrs    atomic.Int64
 	totalRetries atomic.Int64
 	totalBytes   atomic.Int64
+	// totalRanges counts individual row-group (range) reads completed on the
+	// per-range path (doReadMultiRangePerRange).  Zero for all other op types.
+	// Used to compute SamplesPerSec in the summary.
+	totalRanges atomic.Int64
 
 	// objectPaths is the pre-built list of all object names for this track.
 	// Built from DirectoryStructure if set, otherwise from flat ObjectCount.
@@ -449,6 +453,7 @@ func (e *Engine) Run(ctx context.Context) (RunSummary, error) {
 			ts.totalOps.Store(0)
 			ts.totalErrs.Store(0)
 			ts.totalBytes.Store(0)
+			ts.totalRanges.Store(0)
 		}
 	}
 
@@ -496,6 +501,7 @@ func (e *Engine) Run(ctx context.Context) (RunSummary, error) {
 		ops := ts.totalOps.Load()
 		errs := ts.totalErrs.Load()
 		bytes := ts.totalBytes.Load()
+		ranges := ts.totalRanges.Load()
 
 		var opsPerSec, throughput float64
 		if elapsed > 0 {
@@ -509,6 +515,12 @@ func (e *Engine) Run(ctx context.Context) (RunSummary, error) {
 			avgOpSize = float64(bytes) / float64(successfulOps)
 		}
 
+		var samplesPerSec, avgSampleSize float64
+		if ranges > 0 && elapsed > 0 {
+			samplesPerSec = float64(ranges) / elapsed.Seconds()
+			avgSampleSize = float64(bytes) / float64(ranges)
+		}
+
 		stat := TrackStats{
 			TrackName:             ts.cfg.Name,
 			OpType:                ts.cfg.OpType,
@@ -520,6 +532,9 @@ func (e *Engine) Run(ctx context.Context) (RunSummary, error) {
 			ThroughputBytesPerSec: throughput,
 			OpsPerSec:             opsPerSec,
 			AvgOpSizeBytes:        avgOpSize,
+			TotalSamples:          ranges,
+			SamplesPerSec:         samplesPerSec,
+			AvgSampleSizeBytes:    avgSampleSize,
 			TTFB:                  ttfb,
 			TotalLatency:          total,
 		}
@@ -656,7 +671,7 @@ func (e *Engine) runWorker(ctx context.Context, ts *trackState) {
 		var err error
 		switch strings.ToLower(ts.cfg.OpType) {
 		case "read":
-			err = e.doRead(ctx, ts, objectName)
+			err = e.doRead(ctx, ts, rng, objectName)
 		case "write":
 			err = e.doWrite(ctx, ts, rng, objectName)
 		case "stat":
@@ -694,23 +709,92 @@ func (e *Engine) pickObjectFromState(rng *rand.Rand, ts *trackState) string {
 	return ts.objectPaths[rng.Intn(n)]
 }
 
-// doRead issues a GCS read and drains the response to measure throughput.
-// When ReadSize <= 0, the entire object is read (no Range restriction).
-// When ReadSize > 0, a range-read of exactly ReadSize bytes is performed.
-// When ReadType == "multirange", the call is dispatched to doReadMultiRange.
-func (e *Engine) doRead(ctx context.Context, ts *trackState, objectName string) error {
-	if strings.ToLower(ts.cfg.ReadType) == "multirange" {
-		return e.doReadMultiRange(ctx, ts, objectName)
+// computeReadOffset returns the byte offset at which to start a read.
+// When ReadOffsetRandom is true a random offset within [0, objSize−ReadSize]
+// is chosen; objSize is drawn uniformly from [ObjectSizeMin, ObjectSizeMax]
+// (or [SizeSpec.Min, SizeSpec.Max] when set).
+// When ReadOffsetRandom is false, ReadOffset is returned as-is (negative
+// values are valid for the multirange path).
+func computeReadOffset(rng *rand.Rand, track cfg.BenchmarkTrack) int64 {
+	if !track.ReadOffsetRandom {
+		return track.ReadOffset
 	}
+	// When the track uses random read sizes, use the maximum possible size so
+	// that every drawn offset leaves room for the largest range: a read starting
+	// at offset will never exceed (objectSize - effectiveReadSize) + effectiveReadSize
+	// = objectSize.
+	readSize := track.ReadSize
+	if track.ReadSizeMax > readSize {
+		readSize = track.ReadSizeMax
+	}
+	if readSize <= 0 {
+		return 0
+	}
+	// Determine the assumed object size range.
+	minSz := track.ObjectSizeMin
+	maxSz := track.ObjectSizeMax
+	if track.SizeSpec != nil {
+		if track.SizeSpec.Min > 0 {
+			minSz = track.SizeSpec.Min
+		}
+		if track.SizeSpec.Max > 0 {
+			maxSz = track.SizeSpec.Max
+		}
+	}
+	if maxSz <= 0 {
+		maxSz = minSz
+	}
+	if maxSz <= readSize {
+		return 0 // object too small for a ranged read; start at beginning
+	}
+	// Draw a random object size, then a random offset within [0, objSize−readSize].
+	var objSize int64
+	if maxSz > minSz && minSz > 0 {
+		objSize = minSz + rng.Int63n(maxSz-minSz)
+	} else {
+		objSize = maxSz
+	}
+	safeMax := objSize - readSize
+	if safeMax <= 0 {
+		return 0
+	}
+	return rng.Int63n(safeMax + 1)
+}
+
+// doRead issues a GCS read and drains the response to measure throughput.
+// When ReadSize <= 0 and ReadOffset == 0, the entire object is read.
+// When ReadSize > 0 (and optionally ReadOffset > 0), a range-read is performed.
+// When ReadType == "multirange", the call is dispatched to:
+//   - doReadMultiRangePerRange when ReadSizeMin > 0 (per-range latency + random size)
+//   - doReadMultiRange otherwise (aggregate latency, fixed ReadSize)
+func (e *Engine) doRead(ctx context.Context, ts *trackState, rng *rand.Rand, objectName string) error {
+	switch strings.ToLower(ts.cfg.ReadType) {
+	case "multirange":
+		if ts.cfg.ReadSizeMin > 0 {
+			return e.doReadMultiRangePerRange(ctx, ts, rng, objectName)
+		}
+		return e.doReadMultiRange(ctx, ts, rng, objectName)
+	case "traditional-parquet":
+		return e.doReadTraditionalParquet(ctx, ts, rng, objectName)
+	}
+
+	// --- new-reader (default) path ---
 	readSize := ts.cfg.ReadSize
+	offset := computeReadOffset(rng, ts.cfg)
+
+	// Negative offsets cannot be expressed in ByteRange (uint64 Start field).
+	// Direct the caller to use read-type: multirange for footer reads.
+	if offset < 0 {
+		return fmt.Errorf("negative read-offset (%d) requires read-type: multirange", offset)
+	}
 
 	req := &gcs.ReadObjectRequest{
 		Name: objectName,
 	}
 	if readSize > 0 {
 		req.Range = &gcs.ByteRange{
-			Start: 0,
-			Limit: uint64(readSize),
+			Start: uint64(offset),
+			Limit: uint64(offset) + uint64(readSize),
 		}
 	}
 	// readSize <= 0: Range left nil → GCS returns the entire object.
@@ -765,6 +849,11 @@ func (e *Engine) doRead(ctx context.Context, ts *trackState, objectName string) 
 	total := time.Since(start)
 	ts.hists.RecordTotal(total.Microseconds())
 	ts.totalBytes.Add(bytesRead)
+	// Credit samples-per-object if configured (e.g. full-object GET of a
+	// Parquet file where each read delivers N row-group samples).
+	if ts.cfg.SamplesPerObject > 0 {
+		ts.totalRanges.Add(int64(ts.cfg.SamplesPerObject))
+	}
 	logger.Debugf("[doRead] object=%s bytes=%d total=%s throughput=%.1f MiB/s\n",
 		objectName, bytesRead, total.Round(time.Millisecond),
 		float64(bytesRead)/total.Seconds()/float64(1<<20))
@@ -820,69 +909,392 @@ func (e *Engine) getOrCreateMRD(ctx context.Context, objectName string) (gcs.Mul
 	return v.(gcs.MultiRangeDownloader), nil
 }
 
-// doReadMultiRange issues a GCS read using MultiRangeDownloader, reusing the
-// bidi-gRPC connection from the LRU cache where possible.
+// doReadMultiRange issues one or more GCS reads using MultiRangeDownloader,
+// reusing the cached bidi-gRPC connection where possible.
+//
+// ReadsPerObject controls how many independent range reads are fired per
+// operation.  All reads share the same MRD connection and are dispatched
+// concurrently; the operation completes when the last callback fires.  This
+// simulates reading multiple row groups (or column chunks) from a single
+// Parquet file per training step.
+//
+// ReadOffset / ReadOffsetRandom select where within the object each read
+// begins.  A negative ReadOffset (e.g. -32768) reads from the end of the
+// object — the MRD gRPC layer resolves it to a positive position using the
+// object size.
 //
 // The MRD API is push-based: the library calls output.Write(p) as data arrives
-// over the network.  No local buffer is needed on the caller side — io.Discard
-// accepts and discards each chunk as delivered, confirming receipt without
-// storing any data in RAM.  This is fundamentally different from the pull path
-// (doRead) where we need a local buf for reader.Read(buf).
-//
-// TTFB is recorded via TTFBWriter (256 KiB threshold) before handing off to
-// io.Discard, exactly matching the pull path semantics.
-func (e *Engine) doReadMultiRange(ctx context.Context, ts *trackState, objectName string) error {
+// over the network.  io.Discard accepts and discards each chunk immediately,
+// eliminating local RAM accumulation.  TTFB is recorded once across all ranges
+// (first 256 KiB delivered by any range).
+func (e *Engine) doReadMultiRange(ctx context.Context, ts *trackState, rng *rand.Rand, objectName string) error {
 	mrd, err := e.getOrCreateMRD(ctx, objectName)
 	if err != nil {
 		return err
 	}
 
-	start := time.Now()
+	n := ts.cfg.ReadsPerObject
+	if n <= 0 {
+		n = 1
+	}
 	length := ts.cfg.ReadSize // 0 means "until EOF" in the BidiRead API.
 
 	type res struct {
 		bytes int64
 		err   error
 	}
-	done := make(chan res, 1)
+	done := make(chan res, n)
 
-	// TTFBWriter wraps io.Discard:
-	//   - io.Discard receives each pushed chunk and acknowledges it immediately
-	//     without storing a copy — no local RAM accumulation of object data.
-	//   - TTFBWriter fires the TTFB callback once 256 KiB have been received,
-	//     then passes all subsequent writes straight through to io.Discard.
-	tw := &TTFBWriter{
-		Wrapped:   io.Discard,
-		Start:     start,
-		Threshold: 256 * 1024,
-		OnFirst: func(d time.Duration) {
+	start := time.Now()
+
+	// TTFB is recorded once — whichever range response first delivers 256 KiB.
+	var ttfbOnce sync.Once
+	ttfbRecord := func(d time.Duration) {
+		ttfbOnce.Do(func() {
 			ts.hists.RecordTTFB(d.Microseconds())
 			logger.Tracef("[doReadMultiRange] object=%s first-buffer(256KiB)=%s\n",
 				objectName, d.Round(time.Microsecond))
-		},
+		})
 	}
 
-	mrd.Add(tw, 0, length, func(_ int64, bytesRead int64, callbackErr error) {
-		tw.Finalize() // ensure TTFB fires even for sub-threshold objects
-		done <- res{bytes: bytesRead, err: callbackErr}
-	})
-
-	var result res
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case result = <-done:
+	for i := 0; i < n; i++ {
+		offset := computeReadOffset(rng, ts.cfg)
+		tw := &TTFBWriter{
+			Wrapped:   io.Discard,
+			Start:     start,
+			Threshold: 256 * 1024,
+			OnFirst:   ttfbRecord,
+		}
+		mrd.Add(tw, offset, length, func(_ int64, bytesRead int64, callbackErr error) {
+			tw.Finalize() // ensure TTFB fires even for sub-threshold objects
+			done <- res{bytes: bytesRead, err: callbackErr}
+		})
 	}
 
-	if result.err != nil {
-		return result.err
+	var totalBytes int64
+	for i := 0; i < n; i++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case result := <-done:
+			if result.err != nil {
+				return result.err
+			}
+			totalBytes += result.bytes
+		}
 	}
+
 	total := time.Since(start)
 	ts.hists.RecordTotal(total.Microseconds())
-	ts.totalBytes.Add(result.bytes)
-	logger.Debugf("[doReadMultiRange] object=%s bytes=%d total=%s throughput=%.1f MiB/s\n",
-		objectName, result.bytes, total.Round(time.Millisecond),
-		float64(result.bytes)/total.Seconds()/float64(1<<20))
+	ts.totalBytes.Add(totalBytes)
+	logger.Debugf("[doReadMultiRange] object=%s reads=%d bytes=%d total=%s throughput=%.1f MiB/s\n",
+		objectName, n, totalBytes, total.Round(time.Millisecond),
+		float64(totalBytes)/total.Seconds()/float64(1<<20))
+	return nil
+}
+
+// computeReadSize returns the number of bytes to read for a single range.
+//
+// When ReadSizeMin > 0: draws uniformly from [ReadSizeMin, max(ReadSizeMin, ReadSizeMax)].
+// When ReadSizeMin <= 0: returns ReadSize (legacy fixed-size path).
+func computeReadSize(rng *rand.Rand, track cfg.BenchmarkTrack) int64 {
+	if track.ReadSizeMin <= 0 {
+		return track.ReadSize
+	}
+	maxSz := track.ReadSizeMax
+	if maxSz <= track.ReadSizeMin {
+		return track.ReadSizeMin
+	}
+	return track.ReadSizeMin + rng.Int63n(maxSz-track.ReadSizeMin+1)
+}
+
+// doReadMultiRangePerRange is the per-range-latency variant of doReadMultiRange.
+// It is activated when ReadSizeMin > 0 in the track config.
+//
+// Differences from doReadMultiRange:
+//   - Each range records its own TTFB and total-latency into the track histograms
+//     independently.  With ReadsPerObject: N there are N histogram data points
+//     per operation call.  The aggregate end-to-end op latency is not recorded;
+//     histograms reflect the per-range distribution.
+//   - Each range draws an independent random size from [ReadSizeMin, ReadSizeMax]
+//     via computeReadSize.  When ReadSizeMin == ReadSizeMax the size is fixed
+//     but per-range latency tracking is still active.
+//   - Each range gets its own start timestamp; TTFB fires at 256 KiB for that
+//     range individually.
+func (e *Engine) doReadMultiRangePerRange(ctx context.Context, ts *trackState, rng *rand.Rand, objectName string) error {
+	mrd, err := e.getOrCreateMRD(ctx, objectName)
+	if err != nil {
+		return err
+	}
+
+	n := ts.cfg.ReadsPerObject
+	if n <= 0 {
+		n = 1
+	}
+
+	type rangeResult struct {
+		bytes int64
+		total time.Duration
+		ttfb  time.Duration
+		err   error
+	}
+	done := make(chan rangeResult, n)
+
+	for i := 0; i < n; i++ {
+		offset := computeReadOffset(rng, ts.cfg)
+		length := computeReadSize(rng, ts.cfg)
+
+		rangeStart := time.Now()
+		// res is heap-allocated per range so the OnFirst closure and the MRD
+		// callback both operate on the same struct without aliasing.
+		res := &rangeResult{}
+		tw := &TTFBWriter{
+			Wrapped:   io.Discard,
+			Start:     rangeStart,
+			Threshold: 256 * 1024,
+			OnFirst: func(d time.Duration) {
+				res.ttfb = d // fired from within the range goroutine
+			},
+		}
+		// Capture loop-local variables to prevent closure aliasing.
+		capturedRes := res
+		capturedStart := rangeStart
+		capturedTW := tw
+		mrd.Add(tw, offset, length, func(_ int64, bytesRead int64, callbackErr error) {
+			capturedTW.Finalize() // ensure TTFB fires for sub-threshold ranges
+			capturedRes.total = time.Since(capturedStart)
+			capturedRes.bytes = bytesRead
+			capturedRes.err = callbackErr
+			done <- *capturedRes
+		})
+	}
+
+	var totalBytes int64
+	var successfulRanges int64
+	for i := 0; i < n; i++ {
+		select {
+		case <-ctx.Done():
+			// Record any ranges that completed before cancellation.
+			ts.totalRanges.Add(successfulRanges)
+			ts.totalBytes.Add(totalBytes)
+			return ctx.Err()
+		case result := <-done:
+			if result.err != nil {
+				return result.err
+			}
+			// Each range is the unit of measurement: record its own latencies.
+			ts.hists.RecordTotal(result.total.Microseconds())
+			ts.hists.RecordTTFB(result.ttfb.Microseconds())
+			totalBytes += result.bytes
+			successfulRanges++
+		}
+	}
+
+	ts.totalBytes.Add(totalBytes)
+	ts.totalRanges.Add(successfulRanges)
+	logger.Debugf("[doReadMultiRangePerRange] object=%s ranges=%d totalBytes=%d\n",
+		objectName, n, totalBytes)
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Traditional object-storage Parquet read path
+// ---------------------------------------------------------------------------
+
+// doReadTraditionalParquet simulates how a client without MRD or negative-
+// offset support reads a Parquet file from object storage:
+//
+//  1. HEAD/stat the object to discover its byte length (round trip 1).
+//  2. Byte-range GET of the last ReadFooterSize bytes (footer) — must wait for
+//     stat to complete so the absolute offset can be calculated (round trip 2).
+//  3. reads-per-object parallel byte-range GETs for random row groups, each
+//     using a separate NewReaderWithReadHandle call (round trip 3+).
+//
+// Total wall-clock latency = T_stat + T_footer + max(T_rowgroup_i).
+// This is the baseline to compare against doReadMultiRangePerRange, which
+// eliminates the stat round-trip (negative offsets resolved server-side) and
+// multiplexes all ranges over one bidi-gRPC stream.
+//
+// Activated when read-type: traditional-parquet.
+func (e *Engine) doReadTraditionalParquet(ctx context.Context, ts *trackState, rng *rand.Rand, objectName string) error {
+	footerSize := ts.cfg.ReadFooterSize
+	if footerSize <= 0 {
+		footerSize = 32768 // default: 32 KiB Parquet footer
+	}
+	n := ts.cfg.ReadsPerObject
+	if n <= 0 {
+		n = 1
+	}
+
+	opStart := time.Now()
+
+	// --- Phase 1: stat (HEAD) to discover object size ---
+	statReq := &gcs.StatObjectRequest{
+		Name:              objectName,
+		ForceFetchFromGcs: true,
+	}
+	minObj, _, err := e.bucket.StatObject(ctx, statReq)
+	if err != nil {
+		return fmt.Errorf("StatObject: %w", err)
+	}
+	objectSize := int64(minObj.Size)
+	statDone := time.Now()
+	logger.Tracef("[doReadTraditionalParquet] object=%s size=%d stat=%s\n",
+		objectName, objectSize, statDone.Sub(opStart).Round(time.Microsecond))
+
+	// --- Phase 2: footer byte-range GET ---
+	// Calculate absolute offset: objectSize - footerSize.
+	footerStart := objectSize - footerSize
+	if footerStart < 0 {
+		footerStart = 0
+	}
+	footerReq := &gcs.ReadObjectRequest{
+		Name: objectName,
+		Range: &gcs.ByteRange{
+			Start: uint64(footerStart),
+			Limit: uint64(objectSize),
+		},
+	}
+	footerBuf := e.readBufPool.Get().(*[]byte)
+	defer e.readBufPool.Put(footerBuf)
+
+	footerReader, err := e.bucket.NewReaderWithReadHandle(ctx, footerReq)
+	if err != nil {
+		return fmt.Errorf("footer NewReaderWithReadHandle: %w", err)
+	}
+	var footerBytes int64
+	ttfbRecorded := false
+	for {
+		nr, rerr := footerReader.Read(*footerBuf)
+		if !ttfbRecorded {
+			ts.hists.RecordTTFB(time.Since(opStart).Microseconds())
+			ttfbRecorded = true
+		}
+		footerBytes += int64(nr)
+		if rerr == io.EOF {
+			break
+		}
+		if rerr != nil {
+			footerReader.Close()
+			return fmt.Errorf("footer read: %w", rerr)
+		}
+		select {
+		case <-ctx.Done():
+			footerReader.Close()
+			return ctx.Err()
+		default:
+		}
+	}
+	footerReader.Close()
+	footerDone := time.Now()
+	logger.Tracef("[doReadTraditionalParquet] object=%s footer=%s bytes=%d\n",
+		objectName, footerDone.Sub(statDone).Round(time.Microsecond), footerBytes)
+
+	// --- Phase 3: N parallel row-group byte-range GETs ---
+	// Each uses a separate NewReaderWithReadHandle (independent connections,
+	// no stream multiplexing — this is the key difference from MRD).
+	rowGroupSize := ts.cfg.ReadSize
+	if rowGroupSize <= 0 {
+		rowGroupSize = ts.cfg.ReadSizeMin
+	}
+	if rowGroupSize <= 0 {
+		rowGroupSize = 16 * 1024 * 1024 // fallback: 16 MiB
+	}
+
+	type rgResult struct {
+		bytes int64
+		err   error
+	}
+	rgResults := make(chan rgResult, n)
+
+	for i := 0; i < n; i++ {
+		offset := computeReadOffset(rng, ts.cfg)
+		if offset < 0 {
+			// For traditional path, negative offsets are not available without
+			// a prior stat; clamp to a safe computed position using objectSize.
+			offset = objectSize + offset
+			if offset < 0 {
+				offset = 0
+			}
+		}
+		end := offset + rowGroupSize
+		if end > objectSize {
+			end = objectSize
+		}
+		go func(off, lim int64) {
+			req := &gcs.ReadObjectRequest{
+				Name: objectName,
+				Range: &gcs.ByteRange{
+					Start: uint64(off),
+					Limit: uint64(lim),
+				},
+			}
+			reader, rerr := e.bucket.NewReaderWithReadHandle(ctx, req)
+			if rerr != nil {
+				rgResults <- rgResult{err: fmt.Errorf("row-group NewReaderWithReadHandle: %w", rerr)}
+				return
+			}
+			defer reader.Close()
+			var b int64
+			buf := make([]byte, readDrainBufSize)
+			for {
+				nr, readErr := reader.Read(buf)
+				b += int64(nr)
+				if readErr == io.EOF {
+					break
+				}
+				if readErr != nil {
+					rgResults <- rgResult{err: fmt.Errorf("row-group read: %w", readErr)}
+					return
+				}
+				if ctx.Err() != nil {
+					rgResults <- rgResult{err: ctx.Err()}
+					return
+				}
+			}
+			rgResults <- rgResult{bytes: b}
+		}(offset, end)
+	}
+
+	// Collect all row-group results.
+	var totalBytes int64
+	var successfulRanges int64
+	totalBytes += footerBytes
+	for i := 0; i < n; i++ {
+		select {
+		case <-ctx.Done():
+			// Drain remaining goroutines to avoid leaks.
+			go func() {
+				for j := i; j < n; j++ {
+					<-rgResults
+				}
+			}()
+			ts.totalRanges.Add(successfulRanges)
+			ts.totalBytes.Add(totalBytes)
+			return ctx.Err()
+		case r := <-rgResults:
+			if r.err != nil {
+				// Drain remaining.
+				go func() {
+					for j := i + 1; j < n; j++ {
+						<-rgResults
+					}
+				}()
+				ts.totalRanges.Add(successfulRanges)
+				ts.totalBytes.Add(totalBytes)
+				return r.err
+			}
+			totalBytes += r.bytes
+			successfulRanges++
+		}
+	}
+
+	total := time.Since(opStart)
+	ts.hists.RecordTotal(total.Microseconds())
+	ts.totalBytes.Add(totalBytes)
+	ts.totalRanges.Add(successfulRanges)
+	logger.Debugf("[doReadTraditionalParquet] object=%s ranges=%d totalBytes=%d total=%s\n",
+		objectName, n, totalBytes, total.Round(time.Millisecond))
 	return nil
 }
 

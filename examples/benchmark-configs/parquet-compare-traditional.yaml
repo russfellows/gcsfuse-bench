@@ -1,0 +1,88 @@
+# Parquet MRD comparison — TRADITIONAL path
+#
+# PURPOSE
+# -------
+# Half of a side-by-side comparison showing how a traditional object-storage
+# client (no MRD, no negative-offset support) reads Parquet files from GCS.
+# Compare results against parquet-compare-mrd.yaml to quantify the performance
+# advantage of the GCS MultiRangeDownloader (MRD) approach.
+#
+# TRADITIONAL APPROACH (this config)
+# ------------------------------------
+# read-type: traditional-parquet simulates a conventional S3/GCS SDK client:
+#
+#   Phase 1 — HEAD/stat (round trip 1)
+#     Must discover objectSize before computing footer offset.
+#     T_stat ≈ 20–60 ms on GCS (metadata-only request).
+#
+#   Phase 2 — Byte-range GET of footer (round trip 2, sequential)
+#     Offset = objectSize - read-footer-size.
+#     Cannot begin until stat completes.
+#     T_footer ≈ 30–120 ms for 32 KiB from GCS.
+#
+#   Phase 3 — N parallel byte-range GETs for row groups (round trips 3…N+2)
+#     Each range uses a separate NewReaderWithReadHandle (independent
+#     connections, no stream multiplexing).
+#     T_rg ≈ 100–500 ms per row group depending on size and concurrency.
+#
+#   Total latency per file visit = T_stat + T_footer + max(T_rg_0…T_rg_N-1)
+#
+# OPTIMIZED APPROACH (the alternative, parquet-compare-mrd.yaml)
+# ---------------------------------------------------------------
+# MRD eliminates T_stat (negative offsets resolved server-side) and
+# multiplexes ALL ranges (footer + row groups) over one bidi-gRPC stream,
+# cutting round trips and eliminating per-request connection overhead.
+#
+# WHAT TO COMPARE
+# ---------------
+#   Samples/sec        — row groups delivered per second (primary metric)
+#   Avg sample latency — P50/P90/P99 in the histogram (per file visit / N)
+#   Throughput         — may be similar; latency is where the gap shows
+#
+# The traditional path should show:
+#   - Higher per-op latency (stat + footer overhead added to each file visit)
+#   - Lower Samples/sec for the same number of goroutines
+#   - Similar or equal throughput (same bytes transferred if read fractions match)
+#
+# PREREQUISITES
+# -------------
+# Create the dataset first (if not already present):
+#   gcs-bench bench --config examples/benchmark-configs/parquet-like-mrd-prepare.yaml
+#
+# USAGE
+# -----
+#   gcs-bench bench --config examples/benchmark-configs/parquet-compare-traditional.yaml
+#   gcs-bench bench --config examples/benchmark-configs/parquet-compare-traditional.yaml \
+#       --output-dir results/ --output-format yaml
+
+duration: 300s
+warmup-duration: 30s
+total-concurrency: 32
+output-format: yaml
+object-prefix: "parquet-dataset/"
+
+tracks:
+  # ── Traditional Parquet read (stat + footer GET + N row-group GETs) ─────────
+  #
+  # read-type: traditional-parquet executes all three phases sequentially /
+  # partially-parallel per the Parquet dataloader pattern (stat → footer → rows).
+  #
+  # reads-per-object: 8   — N row-group GETs per file visit (Phase 3)
+  #                          Credits 8 samples per op → Samples/sec reported.
+  # read-footer-size: 32768 — 32 KiB footer (Phase 2); default if omitted.
+  # read-size: 16777216   — row-group size for Phase 3 GETs.
+  # read-offset-random: true — random row-group position within the object.
+  #
+  # Keep reads-per-object and read-size identical to parquet-compare-mrd.yaml
+  # for a fair Samples/sec comparison.
+  - name: parquet-traditional
+    op-type: read
+    read-type: traditional-parquet
+    read-footer-size: 32768      # 32 KiB footer (Phase 2)
+    read-size: 16777216          # 16 MiB per row-group GET (Phase 3)
+    read-offset-random: true
+    reads-per-object: 8          # row groups per file visit (must match MRD config)
+    object-count: 1000
+    object-size-min: 33554432    # 32 MiB  (matches prepare config floor)
+    object-size-max: 536870912   # 512 MiB (matches prepare config ceiling)
+    weight: 1                    # single track; all goroutines serve this
