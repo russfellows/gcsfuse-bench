@@ -1,0 +1,41 @@
+# gcs-bench prepare: Parquet-like dataset — write 10,000 objects
+#
+# Run this once to populate the bucket before using parquet-like-mrd.yaml.
+#
+#   gcs-bench bench --config parquet-like-mrd-prepare.yaml
+#
+# Object sizes are drawn from a lognormal distribution approximating real
+# ML Parquet datasets (mean ≈ 128 MiB, std-dev ≈ 64 MiB, clamped to
+# 32 MiB – 512 MiB).
+
+benchmark:
+  bucket: "my-bucket-name"
+  object-prefix: "parquet-dataset/"
+  mode: prepare
+
+  # 16 parallel writers.
+  total-concurrency: 16
+
+  output-path: "./results"
+  output-format: both
+
+  rapid-mode: auto
+
+  histograms:
+    min-value-micros: 1
+    max-value-micros: 60000000
+    significant-digits: 3
+
+  tracks:
+    - name: parquet-files
+      op-type: write
+      weight: 1
+      access-pattern: sequential
+      object-count: 10000
+
+      size-spec:
+        type: lognormal
+        mean: 134217728    # 128 MiB mean
+        std-dev: 67108864  #  64 MiB std-dev
+        min: 33554432      #  32 MiB floor
+        max: 536870912     # 512 MiB ceiling

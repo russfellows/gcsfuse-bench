@@ -100,6 +100,23 @@ type TrackStats struct {
 	// number of bytes actually received from the service.
 	AvgOpSizeBytes float64
 
+	// TotalSamples is the total number of individual row-group (range) reads
+	// completed for this track.  Only populated when the per-range path is
+	// active (read-size-min > 0); zero for all other track types.
+	// For a track with reads-per-object: N, TotalSamples ≈ TotalOps × N.
+	TotalSamples int64 `yaml:"total_samples,omitempty"`
+
+	// SamplesPerSec is the sustained rate of individual row-group reads per
+	// second.  This is the primary AI/ML training throughput metric: it counts
+	// how many independent dataset samples (row groups) were delivered per
+	// second, regardless of how many came from the same Parquet file.
+	// Only populated when TotalSamples > 0.
+	SamplesPerSec float64 `yaml:"samples_per_sec,omitempty"`
+
+	// AvgSampleSizeBytes is the mean bytes per individual row-group read.
+	// Equals TotalBytes / TotalSamples.  Only populated when TotalSamples > 0.
+	AvgSampleSizeBytes float64 `yaml:"avg_sample_size_bytes,omitempty"`
+
 	// TTFB contains latency percentiles for time-to-first-byte (µs).
 	TTFB LatencyPercentiles
 

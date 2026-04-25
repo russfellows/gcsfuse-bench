@@ -105,6 +105,7 @@ func writeTSV(summary RunSummary, path string, notify io.Writer) error {
 
 	header := []string{
 		"track", "goroutines", "ops_total", "errors", "retries", "total_bytes", "ops_per_sec", "throughput_mib_s", "avg_op_size_bytes",
+		"total_samples", "samples_per_sec", "avg_sample_size_bytes",
 		"ttfb_p50_us", "ttfb_p90_us", "ttfb_p95_us", "ttfb_p99_us", "ttfb_p999_us", "ttfb_max_us", "ttfb_mean_us",
 		"total_p50_us", "total_p90_us", "total_p95_us", "total_p99_us", "total_p999_us", "total_max_us", "total_mean_us",
 	}
@@ -123,6 +124,9 @@ func writeTSV(summary RunSummary, path string, notify io.Writer) error {
 			strconv.FormatFloat(t.OpsPerSec, 'f', 2, 64),
 			strconv.FormatFloat(t.ThroughputBytesPerSec/float64(1<<20), 'f', 3, 64),
 			strconv.FormatFloat(t.AvgOpSizeBytes, 'f', 1, 64),
+			strconv.FormatInt(t.TotalSamples, 10),
+			strconv.FormatFloat(t.SamplesPerSec, 'f', 2, 64),
+			strconv.FormatFloat(t.AvgSampleSizeBytes, 'f', 1, 64),
 			fmtF(t.TTFB.P50), fmtF(t.TTFB.P90), fmtF(t.TTFB.P95),
 			fmtF(t.TTFB.P99), fmtF(t.TTFB.P999), fmtF(t.TTFB.Max), fmtF(t.TTFB.Mean),
 			fmtF(t.TotalLatency.P50), fmtF(t.TotalLatency.P90), fmtF(t.TotalLatency.P95),
@@ -282,6 +286,14 @@ func printHumanSummary(w io.Writer, summary RunSummary) {
 		// a counting bug (e.g. totalBytes and totalOps out of sync).
 		fmt.Fprintf(w, "  Throughput check: %s  (ops/s × avg-size; must match Throughput above)\n",
 			humanThroughput(t.OpsPerSec*t.AvgOpSizeBytes))
+		// Per-sample metrics — only printed for per-range path (read-size-min > 0).
+		// Each "sample" is one row-group range read, independent of the parent file op.
+		if t.TotalSamples > 0 {
+			fmt.Fprintf(w, "  Samples/sec:      %s  (%s total row-group reads)\n",
+				commaFloat(t.SamplesPerSec, 2), commaInt(t.TotalSamples))
+			fmt.Fprintf(w, "  Avg sample size:  %s  (bytes per row-group read)\n",
+				humanBytes(t.AvgSampleSizeBytes))
+		}
 
 		// Total (end-to-end) latency
 		fmt.Fprintf(w, "\n  %s latency (end-to-end):\n", capitalize(opLabel))

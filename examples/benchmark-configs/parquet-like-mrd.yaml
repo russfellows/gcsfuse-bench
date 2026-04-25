@@ -1,0 +1,119 @@
+# gcs-bench example: Parquet-like read workload via MultiRangeDownloader
+#
+# Simulates AI/ML training reads against a dataset stored as Parquet files.
+#
+# Real Parquet read pattern
+# ─────────────────────────
+# 1. Open file → read the footer (last ~32 KiB) to get schema + row-group map.
+# 2. For each training batch → select N row groups at random offsets → read
+#    each column chunk (typically 4–128 MiB) with a range request.
+#
+# How this config models it
+# ─────────────────────────
+# Track 1  "parquet-footer"
+#   read-offset: -32768      — negative offset: last 32 KiB of each file
+#   read-size:    32768      — read exactly 32 KiB
+#   read-type:   multirange  — MRD bidi-gRPC stream (resolves negative offset
+#                              to positive using the object size automatically)
+#   weight: 1                — 1 footer read per 8 data reads (matches real ratio)
+#
+# Track 2  "parquet-rowgroup"
+#   read-offset-random: true  — random position within each file
+#   read-size:   16777216     — 16 MiB per range (typical compressed row group)
+#   reads-per-object: 4       — 4 column chunks per "file open" (4 concurrent
+#                               Add() calls on the same bidi-gRPC stream)
+#   read-type:   multirange   — MRD stream stays open between Add() calls
+#   weight: 8                 — 8 data reads per 1 footer read
+#
+# Object layout
+# ─────────────
+# 10,000 Parquet files laid out as a flat dataset prefix.
+# Sizes drawn from a lognormal distribution approximating real ML datasets
+# (mean ≈ 128 MiB, std-dev ≈ 64 MiB, clamped to 32 MiB – 512 MiB).
+#
+# Prepare
+# ───────
+# Before benchmarking, write the objects with:
+#   gcs-bench bench --config parquet-like-mrd-prepare.yaml
+# (see parquet-like-mrd-prepare.yaml for the matching write config)
+#
+# Run
+# ───
+#   gcs-bench bench --config parquet-like-mrd.yaml
+#   gcs-bench bench --config parquet-like-mrd.yaml --dry-run
+
+benchmark:
+  bucket: "my-bucket-name"
+  object-prefix: "parquet-dataset/"
+
+  duration: 5m
+  warmup-duration: 30s
+
+  # 64 goroutines total; split 8:1 (data:footer) by weight → ~57 data, ~7 footer.
+  total-concurrency: 64
+
+  output-path: "./results"
+  output-format: both
+
+  # RAPID (zonal) detection: use "auto" if bucket type is unknown,
+  # "on" to force bidi-gRPC, "off" for standard HTTP/2.
+  rapid-mode: auto
+
+  histograms:
+    min-value-micros: 1
+    max-value-micros: 60000000
+    significant-digits: 3
+
+  tracks:
+
+    # ── Track 1: Footer read ─────────────────────────────────────────────────
+    # Models the mandatory metadata read at the end of every Parquet file.
+    # A negative read-offset is resolved by the MRD gRPC layer to
+    # (object_size + read_offset), i.e. the last |read_offset| bytes.
+    - name: parquet-footer
+      op-type: read
+      read-type: multirange
+      weight: 1
+      access-pattern: random
+
+      # 10,000 Parquet files flat under the prefix.
+      object-count: 10000
+
+      # Expected file size range for random-offset calculations (not used here
+      # since read-offset is static, but documents the dataset characteristics).
+      object-size-min: 33554432    #  32 MiB
+      object-size-max: 536870912   # 512 MiB
+
+      # Read the last 32 KiB (Parquet footer).
+      read-offset: -32768
+      read-size: 32768
+
+    # ── Track 2: Row-group / column-chunk reads ───────────────────────────────
+    # Models batch data reads during training.  Four column-chunk ranges are
+    # fired concurrently on the same bidi-gRPC stream (reads-per-object: 4),
+    # then the operation is measured end-to-end.  Each range lands at a
+    # different random offset within the file, approximating how a Parquet
+    # reader selects row groups for a mini-batch.
+    - name: parquet-rowgroup
+      op-type: read
+      read-type: multirange
+      weight: 8
+      access-pattern: random
+
+      object-count: 10000
+
+      # Size range used by read-offset-random to pick safe offsets.
+      object-size-min: 33554432    #  32 MiB
+      object-size-max: 536870912   # 512 MiB
+
+      # Random offset within [0, object_size - read_size].
+      read-offset-random: true
+
+      # 16 MiB per range read (typical compressed row-group / column-chunk size).
+      # Increase to 64 MiB or 128 MiB for larger row groups.
+      read-size: 16777216
+
+      # Number of concurrent range reads per operation.
+      # 4 simulates reading 4 column chunks per batch step.
+      # Tune to match (num_columns × batch_row_groups) for your workload.
+      reads-per-object: 4

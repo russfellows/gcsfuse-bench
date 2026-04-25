@@ -1,0 +1,81 @@
+# Parquet MRD comparison — OPTIMIZED path
+#
+# PURPOSE
+# -------
+# Half of a side-by-side comparison between two Parquet dataloader
+# implementations on GCS.  Run this alongside parquet-compare-traditional.yaml
+# (or back-to-back against the same dataset) to measure the performance
+# advantage of the GCS MultiRangeDownloader (MRD) bidi-gRPC approach.
+#
+# OPTIMIZED APPROACH (this config)
+# ---------------------------------
+# Uses the GCS MRD API with native negative-offset support:
+#   1. No stat/HEAD needed — footer offset is expressed as -32768 (server
+#      resolves to objectSize - 32768 using known object metadata).
+#   2. Footer read AND all row-group reads are issued over ONE bidi-gRPC
+#      stream — no per-read connection setup, no sequential dependencies.
+#   3. All N row-group ranges fly concurrently over the same stream.
+#
+# TRADITIONAL APPROACH (the alternative, parquet-compare-traditional.yaml)
+# -------------------------------------------------------------------------
+#   1. HEAD/stat the object to learn its byte length.
+#   2. Calculate footer offset = objectSize - 32768, issue byte-range GET.
+#   3. N parallel byte-range GETs for row groups via separate HTTP requests.
+#   Total latency = T_stat + T_footer + max(T_rowgroup_i)
+#
+# WHAT TO COMPARE
+# ---------------
+# Look at these metrics in the row-group track output and compare:
+#   Samples/sec        — row groups delivered per second (primary metric)
+#   Avg sample latency — P50/P90/P99 in the histogram (per row group)
+#   Throughput         — should be similar; latency is the key difference
+#
+# PREREQUISITES
+# -------------
+# Create the dataset first (if not already present):
+#   gcs-bench bench --config examples/benchmark-configs/parquet-like-mrd-prepare.yaml
+#
+# USAGE
+# -----
+#   gcs-bench bench --config examples/benchmark-configs/parquet-compare-mrd.yaml
+#   gcs-bench bench --config examples/benchmark-configs/parquet-compare-mrd.yaml \
+#       --output-dir results/ --output-format yaml
+
+duration: 300s
+warmup-duration: 30s
+total-concurrency: 32
+output-format: yaml
+object-prefix: "parquet-dataset/"
+
+tracks:
+  # ── Footer reads (MRD, negative offset — no stat required) ─────────────────
+  # Negative read-offset is resolved server-side; no prior HEAD/stat needed.
+  # Uses the aggregate MRD path (read-size-min not set); one op per footer.
+  - name: parquet-footer-mrd
+    op-type: read
+    read-type: multirange
+    read-offset: -32768          # last 32 KiB; server resolves without stat
+    read-size: 32768
+    reads-per-object: 1
+    object-count: 1000
+    object-size-min: 33554432    # 32 MiB  (matches prepare config floor)
+    object-size-max: 536870912   # 512 MiB (matches prepare config ceiling)
+    weight: 1
+
+  # ── Row-group reads (MRD, per-range, all ranges on one stream) ─────────────
+  # doReadMultiRangePerRange: N concurrent Add() calls over one bidi-gRPC stream.
+  # Per-range latency histogram + Samples/sec metric.
+  #
+  # Tune read-size-min / read-size-max to your actual row-group sizes.
+  # Tune reads-per-object to the number of row groups read per training step.
+  - name: parquet-rowgroups-mrd
+    op-type: read
+    read-type: multirange
+    read-offset-random: true
+    read-size-min: 8388608       # 8 MiB  minimum row-group size
+    read-size-max: 32768000      # ~31 MiB maximum row-group size
+    reads-per-object: 8          # row groups read per file per step
+    object-count: 1000
+    object-size-min: 33554432
+    object-size-max: 536870912
+    weight: 20

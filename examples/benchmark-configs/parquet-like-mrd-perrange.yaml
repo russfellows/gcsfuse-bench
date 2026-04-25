@@ -1,0 +1,89 @@
+# Parquet-like MRD benchmark — per-row-group sample tracking
+#
+# PURPOSE
+# -------
+# Measures how many individual Parquet row groups (samples) GCS can deliver
+# per second.  This is the primary AI/ML training metric: the number at which
+# your dataloader can feed mini-batches to the accelerator.
+#
+# Reporting beyond bytes/s:
+#   Samples/sec    — row groups delivered per second (key ML metric)
+#   Ops/sec        — Parquet files accessed per second
+#   Avg sample size — bytes per row group read
+#   Per-range latency histogram — P50/P90/P99 latency per row group
+#
+# HOW IT DIFFERS FROM parquet-like-mrd.yaml
+# ------------------------------------------
+# parquet-like-mrd.yaml uses doReadMultiRange:
+#   • All N row groups from one file are one op.
+#   • One latency data point per file access.
+#   • No samples/sec metric.
+#
+# This config uses doReadMultiRangePerRange (activated by read-size-min > 0):
+#   • Each row group is an independent sample with its own latency measurement.
+#   • N histogram data points recorded per file access (one per row group).
+#   • Samples/sec metric reported in output.
+#
+# PREREQUISITES
+# -------------
+# Run parquet-like-mrd-prepare.yaml first to create the dataset:
+#   gcs-bench bench --config examples/benchmark-configs/parquet-like-mrd-prepare.yaml
+#
+# USAGE
+# -----
+#   gcs-bench bench --config examples/benchmark-configs/parquet-like-mrd-perrange.yaml
+#   gcs-bench bench --config examples/benchmark-configs/parquet-like-mrd-perrange.yaml \
+#       --output-dir results/ --output-format yaml
+#
+# KEY YAML FIELDS
+# ---------------
+#   read-size-min > 0    Activates doReadMultiRangePerRange (per-range path).
+#   read-size-max        Upper bound of uniform random range size.
+#                        Set equal to read-size-min for a fixed range size.
+#   reads-per-object     Row groups read per Parquet file per operation.
+#                        SamplesPerSec ≈ OpsPerSec × reads-per-object.
+#   read-offset-random   Selects a different row group offset each time.
+
+duration: 300s
+warmup-duration: 30s
+total-concurrency: 32
+output-format: yaml
+object-prefix: "parquet-dataset/"
+
+tracks:
+  # ── Footer reads ────────────────────────────────────────────────────────────
+  # Simulates the 32 KiB footer read every dataloader does once per file to
+  # parse the schema and row-group byte offsets.  Weight 1 keeps this track
+  # at ~3% of goroutines (matching real dataloader access ratios).
+  # Uses doReadMultiRange (no read-size-min), so footer reads are one op each.
+  - name: parquet-footer
+    op-type: read
+    read-type: multirange
+    weight: 1
+    read-offset: -32768       # last 32 KiB of the object (Parquet footer)
+    read-size: 32768
+    object-size-min: 33554432   # 32 MiB floor
+    object-size-max: 536870912  # 512 MiB ceiling
+    object-count: 10000
+
+  # ── Row-group reads — per-range latency + samples/sec ──────────────────────
+  # Simulates reading N row groups from a single Parquet file per training step.
+  #
+  # read-size-min and read-size-max model variable column-chunk sizes:
+  #   8 MiB  – small/compressed column chunks (integer columns, high-cardinality
+  #             categoricals with good dictionary encoding)
+  #   32 MiB – large/raw column chunks (float32 tensors, image embeddings)
+  #
+  # Tune reads-per-object to match your actual batch size (row groups per step).
+  # E.g. reads-per-object: 16 means 16 samples per Parquet file per op.
+  - name: parquet-rowgroup-samples
+    op-type: read
+    read-type: multirange
+    weight: 31                  # ~97% of goroutines handle row-group reads
+    read-offset-random: true    # random row group within each file
+    read-size-min: 8388608      # 8 MiB minimum row-group size
+    read-size-max: 33554432     # 32 MiB maximum row-group size
+    reads-per-object: 8         # 8 row groups (samples) per Parquet file per op
+    object-size-min: 33554432   # 32 MiB floor
+    object-size-max: 536870912  # 512 MiB ceiling
+    object-count: 10000
