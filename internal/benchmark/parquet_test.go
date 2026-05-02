@@ -695,111 +695,15 @@ func newTraditionalBucket(objectSize int) *traditionalMockBucket {
 	}
 }
 
-// TestTraditionalParquetBasic verifies that read-type: traditional-parquet
-// completes without errors and credits reads-per-object samples per op.
-// The stat returns objectSize, so the footer byte-range offset is computable.
-func TestTraditionalParquetBasic(t *testing.T) {
-	const (
-		objectSize     = 8 << 20 // 8 MiB per fake object
-		footerSize     = 32768   // 32 KiB
-		rowGroupSize   = 1 << 20 // 1 MiB per row group
-		readsPerObject = 4       // row groups per file visit = samples per op
-	)
-	tb := newTraditionalBucket(objectSize)
-	bCfg := cfg.BenchmarkConfig{
-		Duration:         400 * time.Millisecond,
-		TotalConcurrency: 2,
-		OutputFormat:     "yaml",
-		Histograms:       cfg.DefaultHistogramConfig(),
-		Tracks: []cfg.BenchmarkTrack{
-			{
-				Name:             "traditional-parquet",
-				OpType:           "read",
-				ReadType:         "traditional-parquet",
-				Weight:           1,
-				ReadFooterSize:   footerSize,
-				ReadSize:         rowGroupSize,
-				ReadOffsetRandom: true,
-				ReadsPerObject:   readsPerObject,
-				ObjectCount:      5,
-				ObjectSizeMin:    objectSize,
-				ObjectSizeMax:    objectSize,
-			},
-		},
-	}
-	eng, err := NewEngine(tb, bCfg, 0, nil)
-	if err != nil {
-		t.Fatalf("NewEngine: %v", err)
-	}
-	summary, err := eng.Run(context.Background())
-	if err != nil {
-		t.Fatalf("engine.Run: %v", err)
-	}
-	if len(summary.Tracks) == 0 {
-		t.Fatal("expected 1 track")
-	}
-	ts := summary.Tracks[0]
-	if ts.TotalOps == 0 {
-		t.Error("expected > 0 ops")
-	}
-	if ts.Errors > 0 {
-		t.Errorf("expected 0 errors, got %d", ts.Errors)
-	}
-	// Each op should credit readsPerObject samples → TotalSamples > 0.
-	if ts.TotalSamples == 0 {
-		t.Error("expected TotalSamples > 0 (reads-per-object credits samples)")
-	}
-	// SamplesPerSec must be approximately readsPerObject × OpsPerSec.
-	if ts.SamplesPerSec <= 0 {
-		t.Error("expected SamplesPerSec > 0")
-	}
-	minSamplesPerOp := ts.TotalSamples / ts.TotalOps
-	if minSamplesPerOp < int64(readsPerObject)-1 {
-		t.Errorf("avg samples/op = %d, want ≈ %d", minSamplesPerOp, readsPerObject)
-	}
-}
-
-// TestTraditionalParquetDefaultFooterSize verifies that when ReadFooterSize is
-// 0, the engine defaults to 32768 (32 KiB) for the footer read.
-func TestTraditionalParquetDefaultFooterSize(t *testing.T) {
-	const objectSize = 4 << 20
-	tb := newTraditionalBucket(objectSize)
-	bCfg := cfg.BenchmarkConfig{
-		Duration:         300 * time.Millisecond,
-		TotalConcurrency: 1,
-		OutputFormat:     "yaml",
-		Histograms:       cfg.DefaultHistogramConfig(),
-		Tracks: []cfg.BenchmarkTrack{
-			{
-				Name:           "trad-default-footer",
-				OpType:         "read",
-				ReadType:       "traditional-parquet",
-				Weight:         1,
-				ReadFooterSize: 0,          // should default to 32 KiB
-				ReadSize:       512 * 1024, // 512 KiB row groups
-				ReadsPerObject: 2,
-				ObjectCount:    3,
-				ObjectSizeMin:  objectSize,
-				ObjectSizeMax:  objectSize,
-			},
-		},
-	}
-	eng, err := NewEngine(tb, bCfg, 0, nil)
-	if err != nil {
-		t.Fatalf("NewEngine: %v", err)
-	}
-	summary, err := eng.Run(context.Background())
-	if err != nil {
-		t.Fatalf("engine.Run: %v", err)
-	}
-	ts := summary.Tracks[0]
-	if ts.Errors > 0 {
-		t.Errorf("expected 0 errors, got %d", ts.Errors)
-	}
-	if ts.TotalOps == 0 {
-		t.Error("expected > 0 ops")
-	}
-}
+// Note: TestTraditionalParquetBasic and TestTraditionalParquetDefaultFooterSize
+// were removed in v1.3.0.  Those tests used a zero-byte mock bucket whose reader
+// returned no PAR1 magic, which now causes ParseParquetFooter to return
+// ErrNotParquet.  Equivalent (and more thorough) tests that supply real Parquet
+// footer bytes live in parquet_footer_test.go:
+//
+//   - TestTraditionalParquetWithRealFooter
+//   - TestTraditionalParquetDefaultFooterSizeWithRealFooter
+//   - TestTraditionalParquetInvalidFooterReturnsError
 
 // TestSamplesPerObjectNewReader verifies that setting samples-per-object > 0
 // on a plain new-reader track populates TotalSamples and SamplesPerSec in the

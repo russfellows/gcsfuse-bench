@@ -10,6 +10,94 @@ Use `./gcs-bench --version` to confirm.
 
 ---
 
+## v1.3.0 — Synthetic Parquet objects, real-footer traditional-parquet reader, DLRM and UNet3D benchmark configs, multi-prefix automation scripts
+
+### New features
+
+- **`write-format: parquet`** — write tracks now produce synthetic Apache Parquet
+  objects with a genuine Thrift CompactProtocol `FileMetaData` footer. The
+  on-disk layout is:
+
+  ```
+  [PAR1 4B][row-group 0][row-group 1]...[row-group N-1][padding][FileMetaData][4-byte LE metaLen][PAR1 4B]
+  ```
+
+  Row group *i* starts at byte offset `4 + i × row-group-size`. The `FileMetaData`
+  encodes the exact `data_page_offset` and `total_compressed_size` for each row
+  group, making the footer parseable by any conformant Parquet reader (including
+  `pyarrow`, `pandas`, `spark`).  The data-page bytes are random (not valid
+  encoded data pages) — only the footers are spec-compliant.
+
+  New config fields on `op-type: write` tracks:
+  - `row-group-count` — number of row groups (default: `reads-per-object`, then 1)
+  - `row-group-size` — bytes per row group (default: `read-size`, then 65 536)
+
+- **`read-type: traditional-parquet`** — simulates a non-MRD Parquet reader.
+  Per operation it issues three sequential phases:
+  1. `StatObject` → learn the exact object size.
+  2. Byte-range GET of the last `read-footer-size` bytes → decode `FileMetaData`
+     with a hand-rolled Thrift CompactProtocol parser (no external deps).
+  3. `reads-per-object` concurrent `NewReaderWithReadHandle` range GETs, one per
+     randomly-selected row group at its real `data_page_offset`.
+
+  Objects without a valid `PAR1` footer magic are rejected immediately with a
+  counted error (no silent fallback).  Prepare objects with `write-format: parquet`.
+
+  New config field on `read-type: traditional-parquet` tracks:
+  - `read-footer-size` — bytes to read for the footer GET (default: 32 768 = 32 KiB)
+
+- **DLRM embedding-table benchmark configs** — three new example configs under
+  `examples/benchmark-configs/`:
+  - `dlrm-prepare.yaml` — write 5 000 lognormal-distributed Parquet objects
+    (64 MiB – 1 GiB, mean ~256 MiB) representing DLRM v2 embedding tables
+    (~1.25 TiB total), 16 row groups × 64 KiB each.
+  - `dlrm-compare-traditional.yaml` — `traditional-parquet` reader: stat + 32 KiB
+    footer GET + 16 parallel 64 KiB row-group GETs per op.
+  - `dlrm-compare-mrd.yaml` — MRD reader on the same objects for direct comparison.
+
+  Automation scripts under `examples/scripts/`:
+  - `run-dlrm-prepare.sh` — parameterized per-host prepare (WID, EPOCH, CONCURRENCY).
+  - `run-dlrm-compare.sh` — single-prefix MRD vs traditional comparison.
+  - `run-dlrm-compare-all.sh` — all-prefix comparison (all 4 `host-<WID>/` prefixes in
+    parallel) with separate concurrency knobs for each reader type:
+    - `CONCURRENCY` (default 256) — MRD goroutines total across all workers.
+    - `TRAD_CONCURRENCY` (default `CONCURRENCY/4 = 64`) — traditional goroutines total.
+      Traditional ops each open ~18 independent bidi-gRPC streams, so far fewer goroutines
+      are needed to stay below per-prefix GCS throttle thresholds.
+
+- **UNet3D random-read benchmark configs** — new example configs and scripts for
+  MLPerf Storage UNet3D-like workloads (full-object GETs, ~6.9 MiB lognormal objects):
+  - `examples/benchmark-configs/unet3d-rapid-prepare.yaml` — write 100 352 objects per
+    host into `unet3d/host-<WID>/` (width=28, depth=2, 128 files/dir, ~678 GiB/host).
+  - `examples/benchmark-configs/unet3d-rapid.yaml` — RAPID full-object GET workload;
+    `total-concurrency: 64`, 60 s warmup, `rapid-mode: on`.
+  - `examples/scripts/run-unet3d-prepare.sh`, `run-unet3d-read.sh`,
+    `run-unet3d-read-all.sh`, `unet3d-rapid-playbook.sh` — parameterized automation.
+
+- **Additional automation scripts**:
+  - `run-prepare.sh` — generic parameterized prepare wrapper.
+  - `run-read.sh` / `run-read-all.sh` — generic single-host and all-host read wrappers.
+  - `parse_results.py` — Python script to aggregate and display TSV result files from
+    multi-host runs, printing per-host and combined throughput/latency summaries.
+
+### Bug fixes
+
+- **`exporter.go` throughput-check calculation** — the `Throughput check` line in
+  human-readable bench output now uses `successful-ops/s × avg-size` instead of
+  `ops/s × avg-size`.  The old formula overstated throughput when error rate was
+  non-zero (because `OpsPerSec` counts all attempts while `AvgOpSizeBytes` is derived
+  from successful bytes only).  For error-free runs the result is identical to before.
+
+### No breaking changes
+
+All existing benchmark configs and result files are unaffected. The new
+`write-format`, `row-group-count`, `row-group-size`, and `read-footer-size` fields
+default to the previous behaviour (raw random bytes, no Parquet footer) when absent.
+The `traditional-parquet` read type is new and does not alter `new-reader` or
+`multirange` tracks.
+
+---
+
 ## v1.2.3 — Cleanup / delete subcommand, prepare retry tracking, prepare data reporting, RAPID write performance
 
 ### New features

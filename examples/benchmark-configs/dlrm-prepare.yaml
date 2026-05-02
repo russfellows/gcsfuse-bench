@@ -1,0 +1,92 @@
+# DLRM Embedding Table Dataset — prepare (one-time write)
+#
+# Creates synthetic "embedding table" files for the DLRM inferencing demo.
+# Run this once before dlrm-compare-mrd.yaml or dlrm-compare-traditional.yaml.
+#
+#   gcs-bench bench --config examples/benchmark-configs/dlrm-prepare.yaml \
+#       --bucket sig65-rapid1
+#
+# DLRM CONTEXT
+# ─────────────
+# The MLCommons DLRM (Deep Learning Recommendation Model) workload stores
+# categorical feature embeddings as large Parquet files.  Each file represents
+# one embedding table: a mapping from integer feature IDs (e.g. user_id,
+# item_id) to dense float32 vectors.
+#
+# During inference:
+#   1. A batch of (user, item) pairs arrives.
+#   2. For each of the 26 categorical feature dimensions, the dataloader opens
+#      the relevant embedding table (parquet file) and reads small byte-range
+#      "row groups" containing the embedding vectors for the batch.
+#   3. Each lookup is 8–128 KiB (a few hundred to a few thousand embeddings at
+#      64–512 bytes each), accessed at a sparse random offset within the table.
+#   4. Multiple such lookups fire concurrently (one per batch element per table).
+#
+# This create step produces 2000 synthetic embedding tables, lognormally sized
+# (mean ≈ 256 MiB, std-dev ≈ 128 MiB, clamped 64 MiB – 1 GiB) under the
+# prefix dlrm-embeddings/.  Total dataset ≈ 500 GiB.
+#
+# USAGE
+# ─────
+# Single VM (prepare runs on one host; all comparison tests read from there):
+#   EPOCH=$(date -d '+1 minute' +%s)
+#   bash examples/scripts/run-dlrm-prepare.sh $EPOCH
+#
+# Or directly:
+#   gcs-bench bench --config examples/benchmark-configs/dlrm-prepare.yaml \
+#       --bucket sig65-rapid1
+
+benchmark:
+  bucket: "sig65-rapid1"
+  object-prefix: "dlrm-embeddings/"
+  mode: prepare
+
+  # 16 parallel writers to populate the dataset quickly.
+  # Expected write time: ~30–60 s at single-VM GCS write speeds (~5 GiB/s).
+  total-concurrency: 16
+
+  output-path: "./results"
+  output-format: both
+
+  # RAPID auto-detect: write performance benefits from bidi-gRPC too.
+  rapid-mode: auto
+
+  histograms:
+    min-value-micros: 1
+    max-value-micros: 60000000
+    significant-digits: 3
+
+  tracks:
+    - name: dlrm-embedding-tables
+      op-type: write
+      weight: 1
+      access-pattern: sequential
+
+      # Write objects as synthetic Parquet files with a real Thrift CompactProtocol
+      # FileMetaData footer.  This enables the traditional-parquet compare track to
+      # issue range GETs at the actual row-group byte offsets encoded in the footer
+      # rather than relying on statistically-guessed random offsets.
+      #
+      # row-group-count: 16 row groups per object matches reads-per-object in
+      # dlrm-compare-traditional.yaml so every read maps to exactly one row group.
+      # row-group-size: 65536 (64 KiB) matches read-size in the traditional track.
+      write-format: parquet
+      row-group-count: 16
+      row-group-size: 65536    # 64 KiB per row group
+
+      # 5000 embedding table files.  In production DLRM v2, there are 26 tables
+      # with billions of rows each; 5000 files captures the same random-sparse
+      # read access pattern at production-scale data volume (~1.25 TiB).
+      object-count: 5000
+
+      # Lognormal size distribution approximating real embedding table sizes.
+      #   mean  = 256 MiB  (typical compressed embedding table)
+      #   sigma = 128 MiB  (wide spread: small categoricals vs large ID tables)
+      #   floor =  64 MiB  (minimum meaningful embedding table)
+      #   ceil  =   1 GiB  (largest commonly seen table in production)
+      size-spec:
+        type: lognormal
+        mean:    268435456   # 256 MiB
+        std-dev: 134217728   # 128 MiB
+        min:      67108864   #  64 MiB floor
+        max:    1073741824   #   1 GiB ceiling

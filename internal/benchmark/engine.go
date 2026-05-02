@@ -1155,22 +1155,21 @@ func (e *Engine) doReadTraditionalParquet(ctx context.Context, ts *trackState, r
 			Limit: uint64(objectSize),
 		},
 	}
-	footerBuf := e.readBufPool.Get().(*[]byte)
-	defer e.readBufPool.Put(footerBuf)
+	footerBuf := make([]byte, footerSize)
 
 	footerReader, err := e.bucket.NewReaderWithReadHandle(ctx, footerReq)
 	if err != nil {
 		return fmt.Errorf("footer NewReaderWithReadHandle: %w", err)
 	}
-	var footerBytes int64
+	var footerBytesRead int
 	ttfbRecorded := false
-	for {
-		nr, rerr := footerReader.Read(*footerBuf)
+	for footerBytesRead < len(footerBuf) {
+		nr, rerr := footerReader.Read(footerBuf[footerBytesRead:])
 		if !ttfbRecorded {
 			ts.hists.RecordTTFB(time.Since(opStart).Microseconds())
 			ttfbRecorded = true
 		}
-		footerBytes += int64(nr)
+		footerBytesRead += nr
 		if rerr == io.EOF {
 			break
 		}
@@ -1188,19 +1187,22 @@ func (e *Engine) doReadTraditionalParquet(ctx context.Context, ts *trackState, r
 	footerReader.Close()
 	footerDone := time.Now()
 	logger.Tracef("[doReadTraditionalParquet] object=%s footer=%s bytes=%d\n",
-		objectName, footerDone.Sub(statDone).Round(time.Microsecond), footerBytes)
+		objectName, footerDone.Sub(statDone).Round(time.Microsecond), footerBytesRead)
+
+	// Parse the real Parquet FileMetaData to get row-group byte offsets.
+	groups, parseErr := ParseParquetFooter(footerBuf[:footerBytesRead], objectSize)
+	if parseErr != nil {
+		return fmt.Errorf("ParseParquetFooter(%s): %w", objectName, parseErr)
+	}
+	if len(groups) == 0 {
+		return fmt.Errorf("no row groups found in Parquet footer (object=%s)", objectName)
+	}
 
 	// --- Phase 3: N parallel row-group byte-range GETs ---
 	// Each uses a separate NewReaderWithReadHandle (independent connections,
 	// no stream multiplexing — this is the key difference from MRD).
-	rowGroupSize := ts.cfg.ReadSize
-	if rowGroupSize <= 0 {
-		rowGroupSize = ts.cfg.ReadSizeMin
-	}
-	if rowGroupSize <= 0 {
-		rowGroupSize = 16 * 1024 * 1024 // fallback: 16 MiB
-	}
-
+	// Row-group offsets and sizes come from the parsed FileMetaData; we select
+	// a random row group per request.
 	type rgResult struct {
 		bytes int64
 		err   error
@@ -1208,18 +1210,12 @@ func (e *Engine) doReadTraditionalParquet(ctx context.Context, ts *trackState, r
 	rgResults := make(chan rgResult, n)
 
 	for i := 0; i < n; i++ {
-		offset := computeReadOffset(rng, ts.cfg)
-		if offset < 0 {
-			// For traditional path, negative offsets are not available without
-			// a prior stat; clamp to a safe computed position using objectSize.
-			offset = objectSize + offset
-			if offset < 0 {
-				offset = 0
-			}
-		}
-		end := offset + rowGroupSize
-		if end > objectSize {
-			end = objectSize
+		rgIdx := rng.Intn(len(groups))
+		rg := groups[rgIdx]
+		off := rg.Offset
+		lim := rg.Offset + rg.Size
+		if lim > objectSize {
+			lim = objectSize
 		}
 		go func(off, lim int64) {
 			req := &gcs.ReadObjectRequest{
@@ -1253,13 +1249,13 @@ func (e *Engine) doReadTraditionalParquet(ctx context.Context, ts *trackState, r
 				}
 			}
 			rgResults <- rgResult{bytes: b}
-		}(offset, end)
+		}(off, lim)
 	}
 
 	// Collect all row-group results.
 	var totalBytes int64
 	var successfulRanges int64
-	totalBytes += footerBytes
+	totalBytes += int64(footerBytesRead)
 	for i := 0; i < n; i++ {
 		select {
 		case <-ctx.Done():
@@ -1429,6 +1425,14 @@ func (e *Engine) doWrite(ctx context.Context, ts *trackState, rng *rand.Rand, ob
 		size = 4096
 	}
 
+	// Parquet format path: build object with a real Thrift-encoded FileMetaData
+	// footer so that doReadTraditionalParquet can navigate to row groups by their
+	// actual byte offsets.  Bypasses the write pool (pool pre-fills raw random
+	// bytes without the specific PAR1 + row-group + metadata layout required).
+	if ts.cfg.WriteFormat == "parquet" {
+		return e.doWriteParquet(ctx, ts, size, objectName)
+	}
+
 	// Pool fast path: pre-filled slot available and large enough.
 	// Zero heap allocation, zero inline fill in the critical path.
 	if e.writePool != nil && size <= e.writePool.SlotSize() {
@@ -1483,6 +1487,75 @@ func (e *Engine) doWrite(ctx context.Context, ts *trackState, rng *rand.Rand, ob
 		ts.totalBytes.Add(int64(obj.Size))
 	}
 	// Record write total latency. Writes have no TTFB in the read sense.
+	ts.hists.RecordTotal(elapsed.Microseconds())
+	return nil
+}
+
+// doWriteParquet writes a synthetic Parquet object with a real Thrift
+// CompactProtocol FileMetaData footer.
+//
+// Object layout:
+//
+//	[PAR1 4B] [Xoshiro256++ random fill] [Thrift FileMetaData] [4-byte LE metaLen] [PAR1 4B]
+//
+// Row groups are packed consecutively after the leading PAR1; their
+// data_page_offset values in the FileMetaData point into the random fill region
+// so that doReadTraditionalParquet can issue accurate byte-range GETs.
+func (e *Engine) doWriteParquet(ctx context.Context, ts *trackState, size int64, objectName string) error {
+	rgCount := ts.cfg.RowGroupCount
+	if rgCount <= 0 {
+		rgCount = ts.cfg.ReadsPerObject
+	}
+	if rgCount <= 0 {
+		rgCount = 1
+	}
+	rgSize := ts.cfg.RowGroupSize
+	if rgSize <= 0 {
+		rgSize = ts.cfg.ReadSize
+	}
+	if rgSize < 4096 {
+		rgSize = 65536 // 64 KiB safe default
+	}
+
+	footerTail, _, err := BuildParquetFooter(size, rgCount, rgSize)
+	if err != nil {
+		return fmt.Errorf("BuildParquetFooter: %w", err)
+	}
+
+	// Layout: [PAR1 4B][random region][footerTail]
+	// footerTail = [metadata][4-byte metaLen][PAR1 4B]
+	randomSize := size - 4 - int64(len(footerTail))
+	if randomSize < 0 {
+		return fmt.Errorf("object size %d too small for Parquet layout (footer tail = %d bytes)", size, len(footerTail)+4)
+	}
+
+	// Claim a contiguous block-index range for Xoshiro256++ seeding.
+	nblocks := uint64((randomSize + genBlockSize - 1) / genBlockSize)
+	if nblocks == 0 {
+		nblocks = 1
+	}
+	startSeq := e.writeBlockSeq.Add(nblocks) - nblocks
+
+	data := make([]byte, size)
+	copy(data[0:4], parquetMagic[:])
+	if randomSize > 0 {
+		fillRandom(data[4:4+randomSize], e.writeEntropy, startSeq)
+	}
+	copy(data[4+randomSize:], footerTail)
+
+	req := &gcs.CreateObjectRequest{
+		Name:     objectName,
+		Contents: io.NopCloser(bytes.NewReader(data)),
+	}
+	start := time.Now()
+	obj, writeErr := e.bucket.CreateObject(ctx, req)
+	elapsed := time.Since(start)
+	if writeErr != nil {
+		return fmt.Errorf("CreateObject: %w", writeErr)
+	}
+	if obj != nil {
+		ts.totalBytes.Add(int64(obj.Size))
+	}
 	ts.hists.RecordTotal(elapsed.Microseconds())
 	return nil
 }

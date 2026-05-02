@@ -1,0 +1,64 @@
+# gcs-bench: UNet3D PREPARE workload — RAPID (zonal) storage
+#
+# Writes all 100,352 objects under unet3d/host-<N>/ exactly once, then exits.
+# Run this BEFORE unet3d-rapid.yaml read benchmarks.
+#
+# This file is the RAPID-specific version of unet3d-like-prepare.yaml.
+# Differences:
+#   • bucket:       sig65-rapid1            (zonal RAPID bucket)
+#   • rapid-mode:   on                      (skip detection, force bidi-gRPC)
+#   • files-per-dir: 128                    (doubled from original 64)
+#   • total-concurrency: 128               (right-sized for 6.9 MiB objects)
+#
+# The directory-structure and file/dir patterns MUST exactly match
+# unet3d-rapid.yaml — that is how the read workload resolves object names
+# without any GCS bucket listing.
+#
+# Total objects per host:  28² × 128 = 100,352
+# Total data per host:     100,352 × ~6.9 MiB ≈ 678 GiB
+# Expected write time:     ~20-25 min at 128 goroutines on RAPID
+#
+# Use run-unet3d-prepare.sh to coordinate synchronized multi-host writes:
+#   EPOCH=$(date -d '+2 minutes' +%s)
+#   bash run-unet3d-prepare.sh 0 $EPOCH   # vm1
+#   bash run-unet3d-prepare.sh 1 $EPOCH   # vm2
+#   bash run-unet3d-prepare.sh 2 $EPOCH   # vm3
+#   bash run-unet3d-prepare.sh 3 $EPOCH   # vm4
+#
+# Dry-run (no GCS connection):
+#   gcs-bench bench --config unet3d-rapid-prepare.yaml --dry-run
+
+benchmark:
+  mode: prepare
+
+  bucket: "sig65-rapid1"
+  object-prefix: "unet3d/"       # per-host prefix appends host-N/ via --object-prefix
+
+  # 128 goroutines sustains ~5-8 GiB/s on RAPID at ~6.9 MiB/object.
+  # 100,352 objects × 6.9 MiB ≈ 678 GiB; completes in ~20-25 min.
+  total-concurrency: 128
+
+  # Force bidi-gRPC without the detection call — we know this is RAPID.
+  rapid-mode: on
+
+  tracks:
+    - name: unet3d-prepare
+      op-type: write
+
+      # MUST match directory-structure in unet3d-rapid.yaml exactly.
+      # Total objects: 28² × 128 = 100,352
+      directory-structure:
+        width: 28
+        depth: 2
+        files-per-dir: 128
+        dir-pattern: "dir-%04d"    # → dir-0000/ … dir-0027/
+        file-pattern: "obj-%06d"   # → obj-000000 … obj-000127
+
+      # Size distribution: MLPerf Storage UNet3D dataset profile
+      #   real-space mean ≈ 6.9 MiB, σ ≈ 5.5 MiB, range [1 MiB, 32 MiB]
+      size-spec:
+        type: lognormal
+        mean: 7235174     # ~6.9 MiB
+        std-dev: 5788139  # ~5.5 MiB
+        min: 1048576      # 1 MiB floor
+        max: 33554432     # 32 MiB ceiling

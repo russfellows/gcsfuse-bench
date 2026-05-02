@@ -1,0 +1,130 @@
+# DLRM Inferencing — TRADITIONAL path (S3/GCS baseline, no MRD)
+#
+# PURPOSE
+# ────────
+# Baseline comparison showing how a conventional object-storage client
+# (no MultiRangeDownloader, no negative-offset support) reads DLRM embedding
+# tables.  Compare results against dlrm-compare-mrd.yaml to quantify the
+# inferencing latency gap between RAPID MRD and traditional S3-style access.
+#
+# TRADITIONAL APPROACH (this config)
+# ────────────────────────────────────
+# read-type: traditional-parquet simulates a standard S3/GCS SDK client with
+# NO knowledge of bidi-gRPC streaming or negative byte offsets:
+#
+#   Phase 1 — HEAD/stat to discover object size (RTT 1)
+#     T_stat ≈ 20–60 ms on GCS (metadata-only request, no data transferred).
+#     CANNOT be skipped: without object size, the footer offset cannot be
+#     calculated (objectSize − 32768 = footer start).
+#
+#   Phase 2 — Byte-range GET of footer, sequential after stat (RTT 2)
+#     Range = [objectSize − 32768, objectSize)
+#     T_footer ≈ 10–40 ms for 32 KiB from GCS (small object, low-latency).
+#     BLOCKED on Phase 1 — serial dependency is unavoidable.
+#
+#   Phase 3 — N parallel byte-range GETs for embedding vectors (RTT 3+)
+#     16 independent HTTP/2 byte-range GETs via NewReaderWithReadHandle.
+#     Each opens a separate connection (no stream multiplexing).
+#     T_emb ≈ 5–50 ms per 64 KiB range, depending on GCS load.
+#     Phase 3 starts only after Phase 2 completes.
+#
+#   Total latency per file access = T_stat + T_footer + max(T_emb_0 … T_emb_15)
+#   Typical range: 55–150 ms  (vs 2–15 ms with MRD)
+#
+# OPTIMIZED APPROACH (dlrm-compare-mrd.yaml)
+# ───────────────────────────────────────────
+# MRD eliminates the stat round-trip entirely (negative offset resolved
+# server-side) and multiplexes footer + all N embedding lookups over a single
+# persistent bidi-gRPC stream, reducing end-to-end latency by 5–20×.
+#
+# WHAT TO COMPARE (same metrics, both configs)
+# ─────────────────────────────────────────────
+#   Samples/sec    — embedding lookups per second (primary ML throughput metric)
+#   P50/P95/P99    — per-op latency histogram (tail latency drives SLA)
+#   Ops/sec        — file access rate (inference batches per second)
+#
+# Expected outcome:
+#   Traditional:  P50 ≈ 80–150 ms,  Samples/sec ≈ 100–400 (latency-bound)
+#   MRD:          P50 ≈  2–10  ms,  Samples/sec ≈ 4,000–20,000
+#
+# PREREQUISITES
+# ─────────────
+# Dataset created by dlrm-prepare.yaml (shared with MRD config):
+#   gcs-bench bench --config examples/benchmark-configs/dlrm-prepare.yaml \
+#       --bucket sig65-rapid1
+#
+# USAGE
+# ─────
+#   gcs-bench bench --config examples/benchmark-configs/dlrm-compare-traditional.yaml
+#   gcs-bench bench --config examples/benchmark-configs/dlrm-compare-traditional.yaml \
+#       --bucket sig65-rapid1 --dry-run
+#   bash examples/scripts/run-dlrm-compare.sh   # runs both MRD and traditional
+
+benchmark:
+  bucket: "sig65-rapid1"
+  object-prefix: "dlrm-embeddings/"
+
+  duration: 5m
+  warmup-duration: 60s
+
+  # Same 64 goroutines as dlrm-compare-mrd.yaml for a fair comparison.
+  # All goroutines drive the single traditional-parquet track.
+  total-concurrency: 64
+
+  output-path: "./results"
+  output-format: both
+
+  # RAPID mode on: same bucket as MRD test for fair comparison.
+  # The difference is read-type (traditional-parquet vs multirange), NOT the bucket.
+  # This isolates reader architecture as the only variable.
+  rapid-mode: on
+
+  histograms:
+    min-value-micros: 1
+    max-value-micros: 30000000    # 30 s ceiling
+    significant-digits: 3
+
+  tracks:
+
+    # ── Traditional Parquet embedding-table read (stat + footer + N GETs) ────
+    #
+    # read-type: traditional-parquet executes all three phases sequentially /
+    # partially-parallel per the Parquet dataloader access pattern:
+    #   stat → footer GET → 16 parallel embedding byte-range GETs
+    #
+    # read-footer-size: 32768  — 32 KiB footer GET (Phase 2)
+    # read-size:        65536  — 64 KiB per embedding lookup (Phase 3)
+    #                            Mid-range of the MRD [8 KiB – 128 KiB] window.
+    #                            Traditional path uses a fixed size (no per-range
+    #                            random variation) for predictable comparison.
+    # reads-per-object: 16     — 16 parallel embedding GETs (Phase 3)
+    #                            MUST match dlrm-compare-mrd.yaml reads-per-object
+    #                            for a fair Samples/sec comparison.
+    # read-offset-random: true — sparse random embedding access (same as MRD track)
+    #
+    # Latency reported = Phase1 + Phase2 + max(Phase3_i), i.e. full file access
+    # time per inference batch.  This is directly comparable to the per-op
+    # latency reported by the MRD footer + embedding tracks combined.
+    - name: dlrm-traditional
+      op-type: read
+      read-type: traditional-parquet
+
+      read-footer-size: 32768    # 32 KiB Parquet footer (Phase 2)
+      read-size:        65536    # 64 KiB per embedding lookup (Phase 3)
+      read-offset-random: true   # sparse random access within each table
+      reads-per-object: 16       # 16 embedding lookups per inference batch
+
+      # directory-structure with depth: 0 generates paths identical to what
+      # dlrm-prepare.yaml wrote (flat model: prefix + file-pattern(i)).
+      # This allows the track name to differ from the prepare track name
+      # (dlrm-embedding-tables) while still resolving to the correct objects.
+      directory-structure:
+        width: 1
+        depth: 0
+        files-per-dir: 5000
+        file-pattern: "dlrm-embedding-tables-%08d"
+
+      object-size-min:   67108864   #  64 MiB floor  (matches prepare config)
+      object-size-max: 1073741824   #   1 GiB ceiling (matches prepare config)
+
+      weight: 1    # single track; all 64 goroutines drive this track

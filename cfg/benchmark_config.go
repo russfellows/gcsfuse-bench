@@ -240,6 +240,33 @@ type BenchmarkTrack struct {
 	// objectSize]).  Defaults to 32768 (32 KiB) if zero when read-type is
 	// traditional-parquet.
 	ReadFooterSize int64 `yaml:"read-footer-size"`
+
+	// WriteFormat selects the object layout for write operations.
+	//
+	//   "" (default): raw incompressible random bytes (existing behaviour).
+	//   "parquet":    write a synthetic Parquet object with a real Thrift
+	//                 CompactProtocol FileMetaData footer so that
+	//                 read-type: traditional-parquet can navigate to row groups
+	//                 by actual byte offset rather than random guesses.
+	//
+	// Object layout when "parquet":
+	//   [PAR1 4B] [random row-group data] [padding] [FileMetaData] [4-byte LE metaLen] [PAR1 4B]
+	//
+	// Supported in prepare mode only; ignored for read/stat/list operations.
+	WriteFormat string `yaml:"write-format"`
+
+	// RowGroupCount is the number of row groups per object when write-format is
+	// "parquet".  Defaults to ReadsPerObject when zero (enables a direct
+	// apples-to-apples comparison: the traditional-parquet reader issues exactly
+	// ReadsPerObject range GETs, one per row group).  Minimum: 1.
+	RowGroupCount int `yaml:"row-group-count"`
+
+	// RowGroupSize is the size in bytes of each row group when write-format is
+	// "parquet".  The traditional-parquet reader reads row groups at the sizes
+	// recorded in the FileMetaData, not the read-size config field, so changing
+	// this field drives the actual bytes read per range GET.
+	// Defaults to ReadSize when zero.  Minimum: 4096 (enforced at runtime).
+	RowGroupSize int64 `yaml:"row-group-size"`
 }
 
 // DirectoryStructureConfig describes a nested object tree for a track.

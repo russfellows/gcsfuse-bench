@@ -43,6 +43,12 @@ object is fully available to the caller.
     - [CLI flags](#cleanup-cli-flags)
     - [Examples](#cleanup-examples)
     - [Multi-host cleanup](#multi-host-cleanup)
+15. [Synthetic Parquet objects (write-format: parquet)](#15-synthetic-parquet-objects-write-format-parquet)
+    - [Why this exists](#why-this-exists)
+    - [Object layout](#object-layout)
+    - [Write-side config](#write-side-config)
+    - [Read-side: traditional-parquet read type](#read-side-traditional-parquet-read-type)
+    - [DLRM embedding-table example](#dlrm-embedding-table-example)
 
 ---
 
@@ -277,9 +283,26 @@ Controls the GCS read API used for `op-type: read` tracks.
 |-------|-----------|
 | `new-reader` | _(default)_ Creates a `NewReader` per operation — standard HTTP/2 or bidi-gRPC depending on `rapid-mode`. Works with any bucket type. |
 | `multirange` | Uses `NewMultiRangeDownloader` (MRD) — a bidi-gRPC streaming API. MRD connections are cached per object in a 2048-entry LRU and reused across calls. **Requires a RAPID/zonal bucket with `rapid-mode: auto` or `rapid-mode: on`.** |
+| `traditional-parquet` | Simulates a non-MRD Parquet reader. First issues a byte-range GET for the last `read-footer-size` bytes to decode the Thrift CompactProtocol `FileMetaData` footer; then issues `reads-per-object` independent range GETs, one per row group selected at random from the decoded metadata. Objects **must** have been prepared with `write-format: parquet`. See [§15](#15-synthetic-parquet-objects-write-format-parquet). |
 
 See [§13](#13-multirangedownloader-mrd-read-type) for a detailed description
 of the MRD implementation, when to use it, and example configs.
+
+### `write-format` field
+
+Controls the object layout for `op-type: write` tracks.
+
+| Value | Behaviour |
+|-------|-----------|
+| _(empty, default)_ | Writes raw incompressible random bytes. Compatible with all read types. |
+| `parquet` | Writes a synthetic Parquet object with a real [Apache Parquet](https://parquet.apache.org/docs/file-format/) on-disk footer: `[PAR1 magic][random row-group data][Thrift CompactProtocol FileMetaData][4-byte LE metadata length][PAR1 magic]`. Row groups are packed consecutively at byte offset `4 + i × row-group-size`. This enables `read-type: traditional-parquet` to navigate to actual row-group byte ranges instead of guessing. See [§15](#15-synthetic-parquet-objects-write-format-parquet). |
+
+Two optional companion fields control the Parquet layout:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `row-group-count` | `reads-per-object` (then 1) | Number of row groups encoded in `FileMetaData`. Should match `reads-per-object` on the compare track so every range GET maps to exactly one row group. |
+| `row-group-size` | `read-size` | Byte size of each row group as recorded in `ColumnMetaData.total_compressed_size` and `data_page_offset`. The `traditional-parquet` reader uses these values directly — `read-size` on the read track is ignored. |
 
 ### Directory-tree object names
 
@@ -1752,3 +1775,241 @@ echo 'All shards cleaned.'
 # Or clean the entire benchmark prefix in one call
 gcs-bench cleanup --bucket my-bucket --object-prefix resnet50/ --concurrency 256
 ```
+
+---
+
+## 15. Synthetic Parquet objects (`write-format: parquet`)
+
+### Why this exists
+
+A Parquet-aware ML training job (e.g. a DLRM embedding-table reader) does not
+read files sequentially from start to finish.  Instead it:
+
+1. **Reads the footer** — a small byte-range GET from the tail of the file that
+   contains a Thrift-encoded `FileMetaData` structure.  This is typically the
+   last 32–512 KiB.
+2. **Reads row groups by offset** — each row group's `data_page_offset` and
+   `total_compressed_size` are decoded from `FileMetaData`, and the reader then
+   issues one range GET per row group at that exact offset.
+
+Without `write-format: parquet` the benchmark would have to *guess* row-group
+offsets at runtime, which means either randomly picking wrong positions (leading
+to GCS `OutOfRange` errors on objects smaller than the assumed size) or using a
+fixed, unrealistic offset pattern.  With real Parquet footers the benchmark
+mirrors production access patterns exactly.
+
+### Object layout
+
+Objects written with `write-format: parquet` have the following on-disk layout,
+which conforms to the [Apache Parquet format specification](https://parquet.apache.org/docs/file-format/):
+
+```
+offset 0                        PAR1 magic (4 bytes)
+offset 4                        row group 0  ─┐
+offset 4 + row-group-size       row group 1   │  random data
+...                                            │  (Xoshiro256++ PRNG)
+offset 4 + (N-1)×row-group-size row group N-1 ─┘
+                                random padding
+offset objectSize − metaLen − 8 Thrift CompactProtocol FileMetaData
+offset objectSize − 8           4-byte LE uint32: metaLen
+offset objectSize − 4           PAR1 magic (4 bytes)
+```
+
+Row-group data is random bytes (not valid Parquet data pages).  This is
+intentional: gcs-bench measures I/O latency, not data decoding throughput.  The
+footer encodes the real byte offsets so any conformant Parquet footer reader
+(including `pyarrow`, `pandas`, and `spark`) would successfully parse the file
+metadata, even though the data pages would not decode.
+
+### Write-side config
+
+```yaml
+tracks:
+  - name: my-embeddings
+    op-type: write
+    write-format: parquet      # enable Parquet footer encoding
+    row-group-count: 16        # row groups per object (default: reads-per-object)
+    row-group-size: 65536      # 64 KiB per row group (default: read-size)
+    object-count: 5000
+    object-size-min: 67108864  # 64 MiB minimum
+    object-size-max: 1073741824 # 1 GiB maximum
+    size-spec:
+      type: lognormal
+      mean: 268435456
+      std-dev: 134217728
+      min: 67108864
+      max: 1073741824
+```
+
+### Read-side: `traditional-parquet` read type
+
+The `traditional-parquet` read type simulates a client that does **not** use
+MRD.  It issues three sequential phases per operation:
+
+1. **Stat** — `StatObject` to discover the exact object size (required to
+   compute the footer byte range).
+2. **Footer GET** — a single byte-range GET for the last `read-footer-size`
+   bytes.  The response is decoded with a hand-rolled Thrift CompactProtocol
+   parser to extract the `FileMetaData`, including the `data_page_offset` and
+   `total_compressed_size` of every row group.
+3. **Row-group GETs** — `reads-per-object` independent `NewReaderWithReadHandle`
+   calls, one per randomly-selected row group, all dispatched concurrently.
+   Each GET uses the exact `[offset, offset + size]` byte range from the decoded
+   `FileMetaData`.
+
+```yaml
+tracks:
+  - name: traditional-parquet-reader
+    op-type: read
+    read-type: traditional-parquet
+    read-footer-size: 32768   # 32 KiB — must be ≥ actual Thrift metadata size
+    reads-per-object: 16      # number of parallel row-group GETs per op
+    object-count: 5000
+    object-size-min: 67108864
+    object-size-max: 67108864  # set min==max to the prepare-time floor
+```
+
+**No fallback for non-Parquet objects** — if the footer bytes do not end with
+`PAR1` magic, the operation is counted as an error.  Prepare the object set
+with `write-format: parquet` before running a `traditional-parquet` workload.
+
+**`read-footer-size` sizing** — the value must be large enough to contain the
+complete Thrift `FileMetaData` blob.  For 16 row groups the metadata is
+approximately 300–400 bytes; the default 32 KiB is far more than sufficient for
+any realistic Parquet file.
+
+### DLRM embedding-table example
+
+Scripts, configs, and binary all live in the tarball deployed to each VM.
+The typical layout on a test VM is:
+
+```
+~/gcs-bench                              # binary
+~/Tests/examples/benchmark-configs/     # yaml configs
+~/Tests/examples/scripts/               # shell scripts
+~/results/                              # output (auto-created)
+```
+
+#### Files at a glance
+
+| File | Purpose |
+|------|---------|
+| `benchmark-configs/dlrm-prepare.yaml` | Write 5 000 synthetic Parquet objects (64 MiB – 1 GiB, lognormal, mean ≈ 256 MiB, 16 row groups × 64 KiB each) |
+| `benchmark-configs/dlrm-compare-mrd.yaml` | MRD comparison config (bidi-gRPC, negative-offset footer + parallel row-group reads) |
+| `benchmark-configs/dlrm-compare-traditional.yaml` | Traditional comparison config (stat + footer GET + N parallel range GETs) |
+| `scripts/run-dlrm-prepare.sh` | Prepare script — one host at a time, synchronized start |
+| `scripts/run-dlrm-compare.sh` | Single-prefix comparison — each VM reads its own `host-<WID>/` prefix |
+| `scripts/run-dlrm-compare-all.sh` | All-prefix comparison — each VM reads ALL host prefixes simultaneously |
+
+#### Step 1 — Generate the dataset (multi-host, synchronized)
+
+Generate a shared epoch on one VM, then paste it into all four:
+
+```bash
+# On any one VM — generates a start time 3 minutes from now
+EPOCH=$(date -d '+3 minutes' +%s)
+echo $EPOCH          # share this value with all VMs
+```
+
+Then run simultaneously on all four VMs (substitute the shared EPOCH):
+
+```bash
+# vm1 (host-0)
+bash ~/Tests/examples/scripts/run-dlrm-prepare.sh 0 <EPOCH> 32
+
+# vm2 (host-1)
+bash ~/Tests/examples/scripts/run-dlrm-prepare.sh 1 <EPOCH> 32
+
+# vm3 (host-2)
+bash ~/Tests/examples/scripts/run-dlrm-prepare.sh 2 <EPOCH> 32
+
+# vm4 (host-3)
+bash ~/Tests/examples/scripts/run-dlrm-prepare.sh 3 <EPOCH> 32
+```
+
+Script arguments: `<WID> <EPOCH> [CONCURRENCY=16] [BUCKET=sig65-rapid1]`
+
+Each VM writes 5 000 objects (~1.25 TiB) to its own prefix
+`dlrm-embeddings/host-<WID>/`.  Expect 30–120 s at GCS write speeds.
+
+#### Step 2 — Run the MRD vs Traditional comparison (multi-host, all prefixes)
+
+Use `run-dlrm-compare-all.sh` so every VM reads ALL four host prefixes
+simultaneously — this is the cluster-wide aggregate load test.
+
+Generate a new shared epoch, then run on all four VMs at the same time:
+
+```bash
+EPOCH=$(date -d '+3 minutes' +%s)
+echo $EPOCH          # share this value with all VMs
+```
+
+```bash
+# vm1 (host-0)
+bash ~/Tests/examples/scripts/run-dlrm-compare-all.sh 0 <EPOCH> 4 256
+
+# vm2 (host-1)
+bash ~/Tests/examples/scripts/run-dlrm-compare-all.sh 1 <EPOCH> 4 256
+
+# vm3 (host-2)
+bash ~/Tests/examples/scripts/run-dlrm-compare-all.sh 2 <EPOCH> 4 256
+
+# vm4 (host-3)
+bash ~/Tests/examples/scripts/run-dlrm-compare-all.sh 3 <EPOCH> 4 256
+```
+
+Script arguments: `<WID> <EPOCH> [NUM_WORKERS=4] [CONCURRENCY=256] [TRAD_CONCURRENCY=64] [DURATION=5m] [BUCKET=sig65-rapid1]`
+
+- **NUM_WORKERS=4** — reads all four `host-{0..3}/` prefixes in parallel.
+- **CONCURRENCY=256** — goroutines for the **MRD phase**, split as 64 per prefix.
+- **TRAD_CONCURRENCY=64** — goroutines for the **traditional phase** (default: CONCURRENCY/4).
+  Traditional ops issue ~18 GCS requests each (stat + footer + 16 range GETs), so they require
+  fewer goroutines to avoid connection throttling.  At 64 total = 16/prefix, each goroutine's
+  18 outstanding GCS connections stays well below the per-prefix throttle threshold.
+- The script automatically derives the traditional-phase start epoch
+  (`TRAD_EPOCH = EPOCH + warmup + duration + 90s`) so all VMs enter phase 2
+  at the same wall-clock second without any manual coordination.
+
+Results land in `~/results/dlrm-worker-<WID>-compare-all-<EPOCH>/mrd/` and
+`.../traditional/`.
+
+#### Single-prefix comparison (one prefix per VM)
+
+If you only want each VM to read its own host prefix — closer to the single-VM
+baseline — use `run-dlrm-compare.sh` instead:
+
+```bash
+# vm1 reads only host-0/
+bash ~/Tests/examples/scripts/run-dlrm-compare.sh 0 <EPOCH> 64
+
+# vm2 reads only host-1/
+bash ~/Tests/examples/scripts/run-dlrm-compare.sh 1 <EPOCH> 64
+```
+
+Script arguments: `<WID> <EPOCH> [CONCURRENCY=64] [DURATION=5m] [BUCKET=sig65-rapid1]`
+
+#### Cleanup and re-prepare
+
+Delete the old dataset before re-generating (e.g. after changing Parquet
+layout parameters):
+
+```bash
+# Dry-run first to confirm scope
+~/gcs-bench cleanup \
+    --bucket sig65-rapid1 \
+    --object-prefix dlrm-embeddings/host-0/ \
+    --dry-run
+
+# Delete all four shards in parallel (~10-30 s for 5 000 objects per shard)
+for HOST in 0 1 2 3; do
+    ~/gcs-bench cleanup \
+        --bucket sig65-rapid1 \
+        --object-prefix dlrm-embeddings/host-${HOST}/ \
+        --concurrency 128 \
+        --rapid-mode auto &
+done
+wait
+echo "All shards cleaned — ready to re-prepare."
+```
+
+Then repeat Step 1 above.

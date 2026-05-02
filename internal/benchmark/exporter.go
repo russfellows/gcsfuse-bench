@@ -282,10 +282,16 @@ func printHumanSummary(w io.Writer, summary RunSummary) {
 				commaInt(t.Retries))
 		}
 		fmt.Fprintf(w, "  Avg object size:  %s\n", humanBytes(t.AvgOpSizeBytes))
-		// Cross-check: ops/s × avg-size must equal Throughput. Divergence indicates
-		// a counting bug (e.g. totalBytes and totalOps out of sync).
-		fmt.Fprintf(w, "  Throughput check: %s  (ops/s × avg-size; must match Throughput above)\n",
-			humanThroughput(t.OpsPerSec*t.AvgOpSizeBytes))
+		// Cross-check: successful-ops/s × avg-size must equal Throughput.
+		// Using successful ops only (total − errors) so that the check is
+		// meaningful even when there are errors; divergence then indicates a
+		// counting bug (e.g. totalBytes and totalOps out of sync).
+		var successfulOpsPerSec float64
+		if t.TotalOps > 0 {
+			successfulOpsPerSec = t.OpsPerSec * float64(t.TotalOps-t.Errors) / float64(t.TotalOps)
+		}
+		fmt.Fprintf(w, "  Throughput check: %s  (successful-ops/s × avg-size; must match Throughput above)\n",
+			humanThroughput(successfulOpsPerSec*t.AvgOpSizeBytes))
 		// Per-sample metrics — only printed for per-range path (read-size-min > 0).
 		// Each "sample" is one row-group range read, independent of the parent file op.
 		if t.TotalSamples > 0 {

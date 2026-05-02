@@ -1,0 +1,168 @@
+# DLRM Inferencing — OPTIMIZED path via GCS RAPID MultiRangeDownloader (MRD)
+#
+# PURPOSE
+# ────────
+# Benchmarks DLRM embedding-table inferencing using the GCS RAPID bidi-gRPC
+# MultiRangeDownloader.  This is the OPTIMIZED approach that demonstrates what
+# RAPID storage can deliver for low-latency ML inferencing workloads.
+#
+# Compare results against dlrm-compare-traditional.yaml to quantify the
+# advantage of MRD over a conventional S3-style byte-range GET approach.
+#
+# DLRM INFERENCING ACCESS PATTERN
+# ────────────────────────────────
+# 1. Per inference batch (arrived user-item pairs):
+#    a. For each categorical feature (e.g. user_id, item_id, context_id …):
+#       - Open the embedding table (Parquet file) for that feature.
+#       - Read the Parquet footer (last 32 KiB) for schema + row-group offsets.
+#       - Issue N concurrent range reads for the embedding vectors needed by
+#         the batch elements (8–128 KiB per range; sparse random offsets).
+#    b. Gather all embedding vectors → feed to the MLP layers.
+#
+# WHY MRD IS IDEAL FOR DLRM INFERENCING
+# ──────────────────────────────────────
+# MRD (this config):
+#   • Footer offset expressed as -32768 → server resolves without a HEAD/stat.
+#   • Footer + all N embedding lookups are fired over ONE bidi-gRPC stream.
+#   • Stream stays open between batches (LRU MRD cache of 2048 entries).
+#   • All N ranges fly concurrently; delivery order is independent per range.
+#   • Total latency ≈ max(T_range_i)  — dominated by the single slowest range.
+#
+# Traditional S3/GCS approach (dlrm-compare-traditional.yaml):
+#   • HEAD/stat to discover object size         (RTT 1,  ~20–60 ms)
+#   • Byte-range GET for footer at computed     (RTT 2,  ~10–40 ms, sequential)
+#   • N parallel byte-range GETs for rows       (RTT 3+, ~5–50 ms each)
+#   Total latency = T_stat + T_footer + max(T_rg_i)
+#   The stat + footer phases add 30–100 ms of unavoidable serial overhead.
+#
+# KEY METRICS TO COMPARE
+# ──────────────────────
+#   Samples/sec (per-range)   — embedding lookups delivered per second
+#   P50 / P95 / P99 latency   — per-range latency (critical for SLA)
+#   Ops/sec                   — file-access rate (batches per second)
+#
+# PREREQUISITES
+# ─────────────
+# Run the prepare step first (if dataset not yet in bucket):
+#   gcs-bench bench --config examples/benchmark-configs/dlrm-prepare.yaml \
+#       --bucket sig65-rapid1
+#
+# Or use the script:
+#   bash examples/scripts/run-dlrm-prepare.sh
+#
+# USAGE
+# ─────
+#   gcs-bench bench --config examples/benchmark-configs/dlrm-compare-mrd.yaml
+#   gcs-bench bench --config examples/benchmark-configs/dlrm-compare-mrd.yaml \
+#       --bucket sig65-rapid1 --dry-run
+#   bash examples/scripts/run-dlrm-compare.sh
+
+benchmark:
+  bucket: "sig65-rapid1"
+  object-prefix: "dlrm-embeddings/"
+
+  duration: 5m
+  warmup-duration: 60s
+
+  # 64 goroutines total; split 1:20 (footer:embedding) by weight:
+  #   footer track   → ~3 goroutines  (matches real 1:20 access ratio)
+  #   embedding track → ~61 goroutines
+  total-concurrency: 64
+
+  output-path: "./results"
+  output-format: both
+
+  # Force bidi-gRPC for RAPID bucket; MRD requires RAPID.
+  rapid-mode: on
+
+  histograms:
+    min-value-micros: 1
+    max-value-micros: 30000000    # 30 s ceiling (DLRM inferencing SLA context)
+    significant-digits: 3
+
+  tracks:
+
+    # ── Track 1: Parquet footer read (schema + row-group index) ──────────────
+    # Every file access begins with a 32 KiB footer read to locate row groups.
+    # MRD resolves the negative offset server-side — no HEAD/stat needed.
+    # Uses the aggregate path (no read-size-min): one op = one 32 KiB read.
+    - name: dlrm-footer-mrd
+      op-type: read
+      read-type: multirange
+      weight: 1
+      access-pattern: random
+
+      # directory-structure with depth: 0 generates paths identical to what
+      # dlrm-prepare.yaml wrote (flat model: prefix + file-pattern(i)).
+      # This allows the track name to differ from the prepare track name
+      # (dlrm-embedding-tables) while still resolving to the correct objects.
+      directory-structure:
+        width: 1
+        depth: 0
+        files-per-dir: 5000
+        file-pattern: "dlrm-embedding-tables-%08d"
+
+      # Size range for safe offset calculation (documents dataset characteristics).
+      object-size-min:   67108864   #  64 MiB floor
+      object-size-max: 1073741824   #   1 GiB ceiling
+
+      # Negative offset: read the last 32 KiB (Parquet footer / schema).
+      # The MRD gRPC layer resolves this to (objectSize − 32768) server-side.
+      read-offset: -32768
+      read-size:    32768
+
+    # ── Track 2: Embedding vector lookup reads (inference batch) ─────────────
+    # Models the per-batch sparse random embedding lookups from each table.
+    #
+    # read-size-min / read-size-max — variable embedding batch sizes:
+    #   8 KiB   → small table, short embedding vectors (int8 / float16)
+    #   128 KiB → large table, long float32 embedding vectors, wide batch
+    #
+    # reads-per-object: 16 — 16 concurrent Add() calls on ONE bidi-gRPC stream
+    #   per operation, simulating one inference batch accessing 16 embedding
+    #   vectors from the same table.  All 16 ranges fly simultaneously; the op
+    #   completes when the last callback fires (≈ max latency, not sum).
+    #
+    # Because read-size-min > 0, the engine uses doReadMultiRangePerRange:
+    #   • Each of the 16 ranges records its own latency histogram entry.
+    #   • Samples/sec = OpsPerSec × 16  (embedding lookups delivered per second).
+    - name: dlrm-embedding-mrd
+      op-type: read
+      read-type: multirange
+      weight: 20
+      access-pattern: random
+
+      # Same directory-structure as dlrm-footer-mrd — both tracks read from
+      # the same pool of objects written by dlrm-prepare.yaml.
+      directory-structure:
+        width: 1
+        depth: 0
+        files-per-dir: 5000
+        file-pattern: "dlrm-embedding-tables-%08d"
+
+      # object-size-min == object-size-max == 64 MiB (the dataset floor).
+      # computeReadOffset draws objSize from [min, max], then picks an offset
+      # in [0, objSize − read-size-max].  Setting both to the minimum guarantees
+      # the offset is always ≤ 64 MiB − 128 KiB, which is within every object
+      # (all objects are ≥ 64 MiB due to the prepare size-spec floor).
+      # Using a larger object-size-max causes ~99% OutOfRange errors because
+      # the lognormal distribution has mean ~256 MiB; most objects are far
+      # smaller than the 1 GiB ceiling used as the assumed size.
+      object-size-min: 67108864   #  64 MiB (= prepare size-spec floor)
+      object-size-max: 67108864   #  64 MiB — must equal min to avoid OutOfRange
+
+      # Random sparse offset — simulates accessing arbitrary embedding IDs.
+      # Offset is drawn in [0, 64 MiB − read-size-max]; random object selection
+      # (access-pattern: random) provides the cross-table sparsity.
+      read-offset-random: true
+
+      # Variable embedding batch size (8 KiB – 128 KiB).
+      # Reflects real DLRM variation: small categoricals (user demographics)
+      # vs large ID tables (item IDs with 512-dim float32 embeddings).
+      read-size-min:    8192    #   8 KiB minimum embedding batch
+      read-size-max:  131072    # 128 KiB maximum embedding batch
+
+      # 16 concurrent embedding lookups per inference batch per table.
+      # For batch_size=32 with int8 64-dim embeddings: ~32×64 = 2 KiB per range;
+      # for batch_size=64 with float32 512-dim embeddings: ~64×2048 = 128 KiB.
+      reads-per-object: 16

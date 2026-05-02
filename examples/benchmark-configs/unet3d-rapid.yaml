@@ -1,0 +1,94 @@
+# gcs-bench: UNet3D random read workload — RAPID (zonal) storage
+#
+# Full-object GET benchmark simulating MLPerf Storage UNet3D training reads.
+# Objects are ~6.9 MiB lognormal; each read fetches the entire object (no MRD).
+#
+# This file is the RAPID-specific version of unet3d-like.yaml.
+# Differences:
+#   • bucket:           sig65-rapid1        (zonal RAPID bucket)
+#   • rapid-mode:       on                  (force bidi-gRPC)
+#   • files-per-dir:    128                 (doubled from original 64)
+#   • total-concurrency: 64                 (right-sized for 6.9 MiB objects)
+#   • warmup-duration:  60s                 (absorbs bidi-gRPC ramp-up)
+#
+# Objects must already exist. Run run-unet3d-prepare.sh (or
+# unet3d-rapid-prepare.yaml) before benchmarking.
+#
+# Directory structure per host:
+#   width=28, depth=2  →  28² = 784 leaf directories
+#   784 dirs × 128 files  =  100,352 total objects
+#   Size distribution: lognormal, mean ≈ 6.9 MiB, range [1 MiB, 32 MiB]
+#   Total data per host: ~678 GiB
+#
+# Single-host read:
+#   EPOCH=$(date -d '+2 minutes' +%s)
+#   bash run-unet3d-read.sh 0 $EPOCH [CONCURRENCY]
+#
+# 4-host cross-namespace read:
+#   EPOCH=$(date -d '+2 minutes' +%s)
+#   bash run-unet3d-read-all.sh 0 $EPOCH [CONCURRENCY]  # vm1
+#   bash run-unet3d-read-all.sh 1 $EPOCH [CONCURRENCY]  # vm2
+#   bash run-unet3d-read-all.sh 2 $EPOCH [CONCURRENCY]  # vm3
+#   bash run-unet3d-read-all.sh 3 $EPOCH [CONCURRENCY]  # vm4
+#
+# Thread sweep (single host):
+#   for T in 32 64 128 256; do
+#     EPOCH=$(date -d '+2 minutes' +%s)
+#     bash run-unet3d-read.sh 0 $EPOCH $T
+#   done
+#
+# Dry-run:
+#   gcs-bench bench --config unet3d-rapid.yaml --dry-run
+
+benchmark:
+  bucket: "sig65-rapid1"
+
+  # Per-host prefix; run-unet3d-read.sh appends host-N/ via --object-prefix.
+  object-prefix: "unet3d/"
+
+  # 5-minute measurement phase.
+  duration: 5m
+
+  # 60s warmup absorbs bidi-gRPC connection ramp-up on RAPID.
+  warmup-duration: 60s
+
+  # Starting goroutine count.  Objects are ~6.9 MiB (31× larger than ResNet50).
+  # 64 goroutines at ~40 ms mean latency → ~1,600 ops/s × 6.9 MiB ≈ 10.8 GiB/s.
+  # Override with --concurrency N for thread-sweep profiling.
+  total-concurrency: 64
+
+  output-path: "./results"
+  output-format: both
+
+  # Force bidi-gRPC — we know this is a RAPID bucket.
+  rapid-mode: on
+
+  histograms:
+    min-value-micros: 1
+    max-value-micros: 60000000
+    significant-digits: 3
+
+  tracks:
+    - name: unet3d-read
+      op-type: read
+      weight: 1
+      access-pattern: random
+
+      # MUST match directory-structure in unet3d-rapid-prepare.yaml exactly.
+      # Total paths generated: 28² × 128 = 100,352
+      directory-structure:
+        width: 28
+        depth: 2
+        files-per-dir: 128
+        dir-pattern: "dir-%04d"    # → dir-0000/ … dir-0027/
+        file-pattern: "obj-%06d"   # → obj-000000 … obj-000127
+
+      # read-size: 0 (omitted) = full-object GET — no MRD range reads.
+      read-size: 0
+
+      size-spec:
+        type: lognormal
+        mean: 7235174     # Real-space mean ≈ 6.90 MiB
+        std-dev: 5788139  # Real-space std dev ≈ 5.52 MiB
+        min: 1048576      # 1 MiB floor
+        max: 33554432     # 32 MiB ceiling
