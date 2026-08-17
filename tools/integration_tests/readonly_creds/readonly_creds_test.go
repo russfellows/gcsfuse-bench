@@ -23,7 +23,6 @@ import (
 
 	"cloud.google.com/go/storage"
 	"github.com/googlecloudplatform/gcsfuse/v3/tools/integration_tests/util/client"
-	"github.com/googlecloudplatform/gcsfuse/v3/tools/integration_tests/util/creds_tests"
 	"github.com/googlecloudplatform/gcsfuse/v3/tools/integration_tests/util/setup"
 	"github.com/googlecloudplatform/gcsfuse/v3/tools/integration_tests/util/test_suite"
 )
@@ -61,13 +60,7 @@ func TestMain(m *testing.M) {
 	// 1. Load and parse the common configuration.
 	cfg := test_suite.ReadConfigFile(setup.ConfigFile())
 	if len(cfg.ReadonlyCreds) == 0 {
-		log.Println("No configuration found for readonly_creds tests in config. Using flags instead.")
-		cfg.ReadonlyCreds = make([]test_suite.TestConfig, 1)
-		cfg.ReadonlyCreds[0].TestBucket = setup.TestBucket()
-		cfg.ReadonlyCreds[0].GKEMountedDirectory = setup.MountedDirectory()
-		cfg.ReadonlyCreds[0].Configs = make([]test_suite.ConfigItem, 1)
-		cfg.ReadonlyCreds[0].Configs[0].Flags = []string{"--implicit-dirs=true", "--implicit-dirs=false"}
-		cfg.ReadonlyCreds[0].Configs[0].Compatible = map[string]bool{"flat": true, "hns": true, "zonal": true}
+		log.Fatal("No configuration found for ReadonlyCreds in config file.")
 	}
 
 	testEnv.ctx = context.Background()
@@ -101,10 +94,9 @@ func TestMain(m *testing.M) {
 	// Save mount and root directory variables.
 	mountDir, rootDir = testEnv.cfg.GCSFuseMountedDirectory, testEnv.cfg.GCSFuseMountedDirectory
 
-	flags := setup.BuildFlagSets(*testEnv.cfg, testEnv.bucketType, "")
-	// Test for viewer permission on test bucket.
-	successCode := creds_tests.RunTestsForDifferentAuthMethods(testEnv.ctx, testEnv.cfg, testEnv.storageClient, flags, "objectViewer", m)
+	successCode := m.Run()
 
 	setup.CleanupDirectoryOnGCS(testEnv.ctx, testEnv.storageClient, path.Join(testEnv.cfg.TestBucket, testDirName))
+	setup.SaveLogFileInCaseOfFailure(successCode)
 	os.Exit(successCode)
 }

@@ -53,6 +53,8 @@ type noopMetrics struct {}
 
 	func (*noopMetrics) GcsRetryCount(inc int64, retryErrorCategory RetryErrorCategory){}
 
+	func (*noopMetrics) MetadataCacheReadCount(inc int64, cacheHit bool, entryStatus EntryStatus, lookupDetail LookupDetail){}
+
 	func (*noopMetrics) ReadBlockSizes(ctx context.Context, value int64){}
 
 	func (*noopMetrics) TestUpdownCounter(inc int64){}

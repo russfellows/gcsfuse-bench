@@ -22,6 +22,7 @@ import (
 	"github.com/googlecloudplatform/gcsfuse/v3/tools/integration_tests/util/mounting"
 	"github.com/googlecloudplatform/gcsfuse/v3/tools/integration_tests/util/setup"
 	"github.com/googlecloudplatform/gcsfuse/v3/tools/integration_tests/util/test_suite"
+	"github.com/stretchr/testify/require"
 )
 
 // TODO(b/438068132): cleanup deprecated methods after migration is complete.
@@ -71,21 +72,21 @@ func executeTestsForStaticMounting(config *test_suite.TestConfig, flagsSet [][]s
 	return
 }
 
-// Deprecated: Use RunTestsWithConfigFile instead.
-// TODO(b/438068132): cleanup deprecated methods after migration is complete.
-func RunTests(flagsSet [][]string, m *testing.M) (successCode int) {
-	config := &test_suite.TestConfig{
-		TestBucket:              setup.TestBucket(),
-		GKEMountedDirectory:     setup.MountedDirectory(),
-		GCSFuseMountedDirectory: setup.MntDir(),
-		LogFile:                 setup.LogFile(),
-	}
-	return RunTestsWithConfigFile(config, flagsSet, m)
-}
-
 func RunTestsWithConfigFile(config *test_suite.TestConfig, flagsSet [][]string, m *testing.M) (successCode int) {
 	log.Println("Running static mounting tests...")
 	log.Printf("GCSFuse Log File for test: %s\n", config.LogFile)
 	successCode = executeTestsForStaticMounting(config, flagsSet, m)
 	return successCode
+}
+
+func RunSuiteForStaticMounting(config *test_suite.TestConfig, flags []string, t *testing.T, runSuiteFunc func()) {
+	log.Printf("Running static mounting %s with flags: %s", t.Name(), flags)
+	err := MountGcsfuseWithStaticMountingWithConfigFile(config, flags)
+	require.NoError(t, err, "Static mount failed")
+	defer func() {
+		setup.SaveGCSFuseLogFileInCaseOfFailure(t)
+		setup.UnmountGCSFuseWithConfig(config)
+	}()
+
+	runSuiteFunc()
 }

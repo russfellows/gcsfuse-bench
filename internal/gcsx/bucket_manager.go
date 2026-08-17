@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path"
 	"time"
 
 	"github.com/googlecloudplatform/gcsfuse/v3/cfg"
@@ -69,11 +68,6 @@ type BucketConfig struct {
 	ChunkRetryDeadlineSecs   int64
 	ChunkTransferTimeoutSecs int64
 	TmpObjectPrefix          string
-	// Used in Zonal buckets to determine if objects should be finalized or not.
-	FinalizeFileForRapid bool
-
-	// Disable Initial ListObject API check during the mount operation.
-	DisableListAccessCheck bool
 
 	// Enable dummy I/O mode for testing purposes, simulated read without
 	// any data read from GCS.
@@ -83,6 +77,8 @@ type BucketConfig struct {
 	IsTypeCacheDeprecated bool
 
 	ImplicitDir bool
+
+	EnableEmptyManagedFolders bool
 }
 
 // BucketManager manages the lifecycle of buckets.
@@ -185,7 +181,7 @@ func (bm *bucketManager) SetUpBucket(
 	if name == canned.FakeBucketName {
 		b = canned.MakeFakeBucket(ctx)
 	} else {
-		b, err = bm.storageHandle.BucketHandle(ctx, name, bm.config.BillingProject, bm.config.FinalizeFileForRapid)
+		b, err = bm.storageHandle.BucketHandle(ctx, name, bm.config.BillingProject)
 		if err != nil {
 			err = fmt.Errorf("BucketHandle: %w", err)
 			return
@@ -211,7 +207,7 @@ func (bm *bucketManager) SetUpBucket(
 
 	// Limit to a requested prefix of the bucket, if any.
 	if bm.config.OnlyDir != "" {
-		b, err = NewPrefixBucket(path.Clean(bm.config.OnlyDir)+"/", b)
+		b, err = NewPrefixBucket(bm.config.OnlyDir+"/", b)
 		if err != nil {
 			err = fmt.Errorf("NewPrefixBucket: %w", err)
 			return
@@ -246,7 +242,8 @@ func (bm *bucketManager) SetUpBucket(
 			b,
 			bm.config.NegativeStatCacheTTL,
 			bm.config.IsTypeCacheDeprecated,
-			bm.config.ImplicitDir)
+			bm.config.ImplicitDir,
+			bm.config.EnableEmptyManagedFolders)
 	}
 
 	// Enable content type awareness
@@ -266,16 +263,6 @@ func (bm *bucketManager) SetUpBucket(
 
 	// Fetch bucket type from storage layout api and set bucket type.
 	b.BucketType()
-
-	// TODO(b/471129209): Cleanup this code after confirming the GetStorageLayout is sufficient for bucket access checks.
-	if !bm.config.DisableListAccessCheck {
-		// Check whether this bucket works, giving the user a warning early if there
-		// is some problem.
-		_, err = b.ListObjects(ctx, &gcs.ListObjectsRequest{MaxResults: 1, IncludeFoldersAsPrefixes: true, Delimiter: "/"})
-		if err != nil {
-			return
-		}
-	}
 
 	// Periodically garbage collect temporary objects
 	go garbageCollect(bm.gcCtx, bm.config.TmpObjectPrefix, sb)

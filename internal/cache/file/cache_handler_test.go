@@ -21,6 +21,7 @@ import (
 	"os"
 	"path"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -74,7 +75,7 @@ func initializeCacheHandlerTestArgs(t *testing.T, fileCacheConfig *cfg.FileCache
 	mockClient.On("GetStorageLayout", mock.Anything, mock.Anything, mock.Anything).
 		Return(&controlpb.StorageLayout{}, nil)
 	ctx := context.Background()
-	bucket, err := storageHandle.BucketHandle(ctx, storage.TestBucketName, "", false)
+	bucket, err := storageHandle.BucketHandle(ctx, storage.TestBucketName, "")
 	require.NoError(t, err)
 
 	// Create test object in the bucket.
@@ -101,14 +102,16 @@ func initializeCacheHandlerTestArgs(t *testing.T, fileCacheConfig *cfg.FileCache
 
 	// Follow consistency, local-cache file, entry in fileInfo cache and job should exist initially.
 	fileInfoKeyName := addTestFileInfoEntryInCache(t, cache, object, storage.TestBucketName, cacheDirVolumeBlockSize)
-	downloadPath := util.GetDownloadPath(cacheHandler.cacheDir, util.GetObjectPath(bucket.Name(), object.Name))
+	downloadPath, err := util.GetDownloadPath(cacheHandler.cacheDir, util.GetObjectPath(bucket.Name(), object.Name))
+	require.NoError(t, err)
 	_, err = util.CreateFile(data.FileSpec{Path: downloadPath, FilePerm: util.DefaultFilePerm, DirPerm: util.DefaultDirPerm}, os.O_RDONLY)
 	t.Cleanup(func() {
 		operations.RemoveDir(cacheDir)
 	})
 	require.NoError(t, err)
 
-	job := jobManager.CreateJobIfNotExists(object, bucket)
+	job, err := jobManager.CreateJobIfNotExists(object, bucket)
+	require.NoError(t, err)
 	require.NotNil(t, job)
 
 	return &cacheHandlerTestArgs{
@@ -158,7 +161,8 @@ func addTestFileInfoEntryInCache(t *testing.T, cache *lru.Cache, object *gcs.Min
 
 func getDownloadJobForTestObject(t *testing.T, chTestArgs *cacheHandlerTestArgs) *downloader.Job {
 	t.Helper()
-	job := chTestArgs.jobManager.CreateJobIfNotExists(chTestArgs.object, chTestArgs.bucket)
+	job, err := chTestArgs.jobManager.CreateJobIfNotExists(chTestArgs.object, chTestArgs.bucket)
+	require.NoError(t, err)
 	require.NotNil(t, job)
 	return job
 }
@@ -189,7 +193,7 @@ func doesFileExist(t *testing.T, filePath string) bool {
 	return false
 }
 func Test_createLocalFileReadHandle_OnlyForRead(t *testing.T) {
-	cacheDir := path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir")
+	cacheDir := createTestCacheDir(t, "cache_handler_test")
 	chTestArgs := initializeCacheHandlerTestArgs(t, &cfg.FileCacheConfig{EnableCrc: true}, cacheDir)
 
 	readFileHandle, err := chTestArgs.cacheHandler.createLocalFileReadHandle(chTestArgs.object.Name, chTestArgs.bucket.Name())
@@ -203,12 +207,10 @@ func Test_cleanUpEvictedFile(t *testing.T) {
 	tbl := []struct {
 		name            string
 		fileCacheConfig cfg.FileCacheConfig
-		cacheDir        string
 	}{
 		{
 			name:            "Non parallel downloads",
 			fileCacheConfig: cfg.FileCacheConfig{EnableCrc: true},
-			cacheDir:        path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir"),
 		},
 		{
 			name: "Parallel downloads",
@@ -220,12 +222,12 @@ func Test_cleanUpEvictedFile(t *testing.T) {
 				DownloadChunkSizeMb:      3,
 				WriteBufferSize:          4 * 1024 * 1024,
 			},
-			cacheDir: path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir"),
 		},
 	}
 	for _, tc := range tbl {
 		t.Run(tc.name, func(t *testing.T) {
-			chTestArgs := initializeCacheHandlerTestArgs(t, &tc.fileCacheConfig, tc.cacheDir)
+			cacheDir := createTestCacheDir(t, "cache_handler_test")
+			chTestArgs := initializeCacheHandlerTestArgs(t, &tc.fileCacheConfig, cacheDir)
 			fileDownloadJob := getDownloadJobForTestObject(t, chTestArgs)
 			fileInfo := chTestArgs.cache.LookUp(chTestArgs.fileInfoKeyName)
 			fileInfoData := fileInfo.(data.FileInfo)
@@ -248,7 +250,7 @@ func Test_cleanUpEvictedFile(t *testing.T) {
 }
 
 func Test_cleanUpEvictedFile_WhenLocalFileNotExist(t *testing.T) {
-	cacheDir := path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir")
+	cacheDir := createTestCacheDir(t, "cache_handler_test")
 	chTestArgs := initializeCacheHandlerTestArgs(t, &cfg.FileCacheConfig{EnableCrc: true}, cacheDir)
 	fileDownloadJob := getDownloadJobForTestObject(t, chTestArgs)
 	fileInfo := chTestArgs.cache.LookUp(chTestArgs.fileInfoKeyName)
@@ -272,7 +274,7 @@ func Test_cleanUpEvictedFile_WhenLocalFileNotExist(t *testing.T) {
 }
 
 func Test_addFileInfoEntryAndCreateDownloadJob_IfAlready(t *testing.T) {
-	cacheDir := path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir")
+	cacheDir := createTestCacheDir(t, "cache_handler_test")
 	chTestArgs := initializeCacheHandlerTestArgs(t, &cfg.FileCacheConfig{EnableCrc: true}, cacheDir)
 	existingJob := getDownloadJobForTestObject(t, chTestArgs)
 
@@ -286,7 +288,7 @@ func Test_addFileInfoEntryAndCreateDownloadJob_IfAlready(t *testing.T) {
 }
 
 func Test_addFileInfoEntryAndCreateDownloadJob_GenerationChanged(t *testing.T) {
-	cacheDir := path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir")
+	cacheDir := createTestCacheDir(t, "cache_handler_test")
 	chTestArgs := initializeCacheHandlerTestArgs(t, &cfg.FileCacheConfig{EnableCrc: true}, cacheDir)
 	existingJob := getDownloadJobForTestObject(t, chTestArgs)
 	chTestArgs.object.Generation = chTestArgs.object.Generation + 1
@@ -302,7 +304,7 @@ func Test_addFileInfoEntryAndCreateDownloadJob_GenerationChanged(t *testing.T) {
 }
 
 func Test_addFileInfoEntryAndCreateDownloadJob_IfNotAlready(t *testing.T) {
-	cacheDir := path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir")
+	cacheDir := createTestCacheDir(t, "cache_handler_test")
 	chTestArgs := initializeCacheHandlerTestArgs(t, &cfg.FileCacheConfig{EnableCrc: true}, cacheDir)
 	oldJob := getDownloadJobForTestObject(t, chTestArgs)
 	// Content of size more than 20 leads to eviction of initial TestObjectName.
@@ -326,8 +328,30 @@ func Test_addFileInfoEntryAndCreateDownloadJob_IfNotAlready(t *testing.T) {
 	assert.Equal(t, downloader.NotStarted, minObjectJob.GetStatus().Name)
 }
 
+func Test_addFileInfoEntryAndCreateDownloadJob_PathValidationFailure(t *testing.T) {
+	cacheDir := createTestCacheDir(t, "cache_handler_test")
+	chTestArgs := initializeCacheHandlerTestArgs(t, &cfg.FileCacheConfig{EnableCrc: true}, cacheDir)
+	oldJob := getDownloadJobForTestObject(t, chTestArgs)
+	// Content of size more than 20 would lead to eviction of initial TestObjectName if inserted.
+	minObject := createObject(t, chTestArgs.bucket, "../../etc/passwd", []byte("content of object_1 ..."))
+	existingJob := chTestArgs.jobManager.GetJob(minObject.Name, chTestArgs.bucket.Name())
+	require.Nil(t, existingJob)
+
+	// Insertion should fail at path validation before modifying cache or evicting.
+	err := chTestArgs.cacheHandler.addFileInfoEntryAndCreateDownloadJob(minObject, chTestArgs.bucket)
+
+	assert.Error(t, err)
+	assert.True(t, strings.Contains(err.Error(), "is outside cache directory"))
+	// Ensure no entry was added to fileInfoCache.
+	assert.False(t, isEntryInFileInfoCache(t, chTestArgs.cache, minObject.Name, chTestArgs.bucket.Name()))
+	// Ensure existing valid cache entries (and jobs) were not evicted or invalidated.
+	assert.True(t, isEntryInFileInfoCache(t, chTestArgs.cache, chTestArgs.object.Name, chTestArgs.bucket.Name()))
+	assert.NotEqual(t, downloader.Invalid, oldJob.GetStatus().Name)
+	assert.Nil(t, chTestArgs.jobManager.GetJob(minObject.Name, chTestArgs.bucket.Name()))
+}
+
 func Test_addFileInfoEntryAndCreateDownloadJob_IfLocalFileGetsDeleted(t *testing.T) {
-	cacheDir := path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir")
+	cacheDir := createTestCacheDir(t, "cache_handler_test")
 	chTestArgs := initializeCacheHandlerTestArgs(t, &cfg.FileCacheConfig{EnableCrc: true}, cacheDir)
 	// Delete the local cache file.
 	err := os.Remove(chTestArgs.downloadPath)
@@ -341,7 +365,7 @@ func Test_addFileInfoEntryAndCreateDownloadJob_IfLocalFileGetsDeleted(t *testing
 }
 
 func Test_addFileInfoEntryAndCreateDownloadJob_WhenJobHasCompleted(t *testing.T) {
-	cacheDir := path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir")
+	cacheDir := createTestCacheDir(t, "cache_handler_test")
 	chTestArgs := initializeCacheHandlerTestArgs(t, &cfg.FileCacheConfig{EnableCrc: true}, cacheDir)
 	existingJob := getDownloadJobForTestObject(t, chTestArgs)
 	// Make the job completed, so it's removed from job manager.
@@ -363,7 +387,7 @@ func Test_addFileInfoEntryAndCreateDownloadJob_WhenJobHasCompleted(t *testing.T)
 }
 
 func Test_addFileInfoEntryAndCreateDownloadJob_WhenJobIsInvalidatedAndRemoved(t *testing.T) {
-	cacheDir := path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir")
+	cacheDir := createTestCacheDir(t, "cache_handler_test")
 	chTestArgs := initializeCacheHandlerTestArgs(t, &cfg.FileCacheConfig{EnableCrc: true}, cacheDir)
 	chTestArgs.jobManager.InvalidateAndRemoveJob(chTestArgs.object.Name, chTestArgs.bucket.Name())
 	existingJob := chTestArgs.jobManager.GetJob(chTestArgs.object.Name, chTestArgs.bucket.Name())
@@ -382,7 +406,7 @@ func Test_addFileInfoEntryAndCreateDownloadJob_WhenJobIsInvalidatedAndRemoved(t 
 }
 
 func Test_addFileInfoEntryAndCreateDownloadJob_WhenJobHasFailed(t *testing.T) {
-	cacheDir := path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir")
+	cacheDir := createTestCacheDir(t, "cache_handler_test")
 	chTestArgs := initializeCacheHandlerTestArgs(t, &cfg.FileCacheConfig{EnableCrc: true}, cacheDir)
 	existingJob := getDownloadJobForTestObject(t, chTestArgs)
 	// Hack to fail the async job
@@ -407,7 +431,7 @@ func Test_addFileInfoEntryAndCreateDownloadJob_WhenJobHasFailed(t *testing.T) {
 }
 
 func Test_GetCacheHandle_WhenCacheHasDifferentGeneration(t *testing.T) {
-	cacheDir := path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir")
+	cacheDir := createTestCacheDir(t, "cache_handler_test")
 	chTestArgs := initializeCacheHandlerTestArgs(t, &cfg.FileCacheConfig{EnableCrc: true}, cacheDir)
 	existingJob := getDownloadJobForTestObject(t, chTestArgs)
 	require.NotNil(t, existingJob)
@@ -426,7 +450,7 @@ func Test_GetCacheHandle_WhenCacheHasDifferentGeneration(t *testing.T) {
 }
 
 func Test_GetCacheHandle_WhenAsyncDownloadJobHasFailed(t *testing.T) {
-	cacheDir := path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir")
+	cacheDir := createTestCacheDir(t, "cache_handler_test")
 	chTestArgs := initializeCacheHandlerTestArgs(t, &cfg.FileCacheConfig{EnableCrc: true}, cacheDir)
 	existingJob := getDownloadJobForTestObject(t, chTestArgs)
 	// Hack to fail the async job
@@ -448,7 +472,7 @@ func Test_GetCacheHandle_WhenAsyncDownloadJobHasFailed(t *testing.T) {
 }
 
 func Test_GetCacheHandle_WhenFileInfoAndJobAreAlreadyPresent(t *testing.T) {
-	cacheDir := path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir")
+	cacheDir := createTestCacheDir(t, "cache_handler_test")
 	chTestArgs := initializeCacheHandlerTestArgs(t, &cfg.FileCacheConfig{EnableCrc: true}, cacheDir)
 	// File info and download job are already present for test object.
 	existingJob := getDownloadJobForTestObject(t, chTestArgs)
@@ -465,7 +489,7 @@ func Test_GetCacheHandle_WhenFileInfoAndJobAreAlreadyPresent(t *testing.T) {
 }
 
 func Test_GetCacheHandle_WhenFileInfoAndJobAreNotPresent(t *testing.T) {
-	cacheDir := path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir")
+	cacheDir := createTestCacheDir(t, "cache_handler_test")
 	chTestArgs := initializeCacheHandlerTestArgs(t, &cfg.FileCacheConfig{EnableCrc: true}, cacheDir)
 	minObject := createObject(t, chTestArgs.bucket, "object_1", []byte("content of object_1"))
 
@@ -483,12 +507,10 @@ func Test_GetCacheHandle_WithEviction(t *testing.T) {
 	tbl := []struct {
 		name            string
 		fileCacheConfig cfg.FileCacheConfig
-		cacheDir        string
 	}{
 		{
 			name:            "Non parallel downloads",
 			fileCacheConfig: cfg.FileCacheConfig{EnableCrc: true},
-			cacheDir:        path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir"),
 		},
 		{
 			name: "Parallel downloads",
@@ -500,16 +522,14 @@ func Test_GetCacheHandle_WithEviction(t *testing.T) {
 				DownloadChunkSizeMb:      3,
 				WriteBufferSize:          4 * 1024 * 1024,
 			},
-			cacheDir: path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir"),
 		},
 	}
 	for _, tc := range tbl {
 		t.Run(tc.name, func(t *testing.T) {
-			chTestArgs := initializeCacheHandlerTestArgs(t, &tc.fileCacheConfig, tc.cacheDir)
+			cacheDir := createTestCacheDir(t, "cache_handler_test")
+			chTestArgs := initializeCacheHandlerTestArgs(t, &tc.fileCacheConfig, cacheDir)
 			// Start the existing job
 			existingJob := getDownloadJobForTestObject(t, chTestArgs)
-			_, err := existingJob.Download(context.Background(), 1, false)
-			require.NoError(t, err)
 			// Content of size more than 20 leads to eviction of initial TestObjectName.
 			// Here, content size is 21.
 			minObject := createObject(t, chTestArgs.bucket, "object_1", []byte("content of object_1 ..."))
@@ -526,7 +546,7 @@ func Test_GetCacheHandle_WithEviction(t *testing.T) {
 }
 
 func Test_GetCacheHandle_IfLocalFileGetsDeleted(t *testing.T) {
-	cacheDir := path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir")
+	cacheDir := createTestCacheDir(t, "cache_handler_test")
 	chTestArgs := initializeCacheHandlerTestArgs(t, &cfg.FileCacheConfig{EnableCrc: true}, cacheDir)
 	// Delete the local cache file.
 	err := os.Remove(chTestArgs.downloadPath)
@@ -546,7 +566,7 @@ func Test_GetCacheHandle_IfLocalFileGetsDeleted(t *testing.T) {
 
 func Test_GetCacheHandle_ExcludeFromCache(t *testing.T) {
 	regex := ".*object_1"
-	cacheDir := path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir")
+	cacheDir := createTestCacheDir(t, "cache_handler_test")
 	chTestArgs := initializeCacheHandlerTestArgs(t, &cfg.FileCacheConfig{EnableCrc: true, ExcludeRegex: regex}, cacheDir)
 
 	// Check cache handle is not created for excluded file
@@ -565,7 +585,7 @@ func Test_GetCacheHandle_ExcludeFromCache(t *testing.T) {
 
 func Test_GetCacheHandle_IncludeInCache(t *testing.T) {
 	regex := ".*object_1"
-	cacheDir := path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir")
+	cacheDir := createTestCacheDir(t, "cache_handler_test")
 	chTestArgs := initializeCacheHandlerTestArgs(t, &cfg.FileCacheConfig{EnableCrc: true, IncludeRegex: regex}, cacheDir)
 
 	// Check cache handle is created for included file.
@@ -584,7 +604,7 @@ func Test_GetCacheHandle_IncludeInCache(t *testing.T) {
 func Test_GetCacheHandle_IncludeAndExclude(t *testing.T) {
 	includeRegex := ".*\\.txt"
 	excludeRegex := ".*_internal\\.txt"
-	cacheDir := path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir")
+	cacheDir := createTestCacheDir(t, "cache_handler_test")
 	chTestArgs := initializeCacheHandlerTestArgs(t, &cfg.FileCacheConfig{EnableCrc: true, IncludeRegex: includeRegex, ExcludeRegex: excludeRegex}, cacheDir)
 
 	// Check cache handle is created for included file.
@@ -602,7 +622,7 @@ func Test_GetCacheHandle_IncludeAndExclude(t *testing.T) {
 
 func Test_GetCacheHandle_SameIncludeAndExcludeRegex(t *testing.T) {
 	regex := ".*\\.txt"
-	cacheDir := path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir")
+	cacheDir := createTestCacheDir(t, "cache_handler_test")
 	chTestArgs := initializeCacheHandlerTestArgs(t, &cfg.FileCacheConfig{EnableCrc: true, IncludeRegex: regex, ExcludeRegex: regex}, cacheDir)
 
 	// Check cache handle is not created for a file that matches both include and
@@ -618,12 +638,10 @@ func Test_GetCacheHandle_CacheForRangeRead(t *testing.T) {
 	tbl := []struct {
 		name            string
 		fileCacheConfig cfg.FileCacheConfig
-		cacheDir        string
 	}{
 		{
 			name:            "Non parallel downloads",
 			fileCacheConfig: cfg.FileCacheConfig{EnableCrc: true},
-			cacheDir:        path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir"),
 		},
 		{
 			name: "Parallel downloads",
@@ -635,12 +653,12 @@ func Test_GetCacheHandle_CacheForRangeRead(t *testing.T) {
 				DownloadChunkSizeMb:      3,
 				WriteBufferSize:          4 * 1024 * 1024,
 			},
-			cacheDir: path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir"),
 		},
 	}
 	for _, tc := range tbl {
 		t.Run(tc.name, func(t *testing.T) {
-			chTestArgs := initializeCacheHandlerTestArgs(t, &tc.fileCacheConfig, tc.cacheDir)
+			cacheDir := createTestCacheDir(t, "cache_handler_test")
+			chTestArgs := initializeCacheHandlerTestArgs(t, &tc.fileCacheConfig, cacheDir)
 			minObject1 := createObject(t, chTestArgs.bucket, "object_1", []byte("content of object_1 ..."))
 			cacheHandle1, err1 := chTestArgs.cacheHandler.GetCacheHandle(minObject1, chTestArgs.bucket, false, 0)
 			minObject2 := createObject(t, chTestArgs.bucket, "object_2", []byte("content of object_2 ..."))
@@ -666,12 +684,10 @@ func Test_GetCacheHandle_ConcurrentSameFile(t *testing.T) {
 	tbl := []struct {
 		name            string
 		fileCacheConfig cfg.FileCacheConfig
-		cacheDir        string
 	}{
 		{
 			name:            "Non parallel downloads",
 			fileCacheConfig: cfg.FileCacheConfig{EnableCrc: true},
-			cacheDir:        path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir"),
 		},
 		{
 			name: "Parallel downloads",
@@ -683,12 +699,12 @@ func Test_GetCacheHandle_ConcurrentSameFile(t *testing.T) {
 				DownloadChunkSizeMb:      3,
 				WriteBufferSize:          4 * 1024 * 1024,
 			},
-			cacheDir: path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir"),
 		},
 	}
 	for _, tc := range tbl {
 		t.Run(tc.name, func(t *testing.T) {
-			chTestArgs := initializeCacheHandlerTestArgs(t, &tc.fileCacheConfig, tc.cacheDir)
+			cacheDir := createTestCacheDir(t, "cache_handler_test")
+			chTestArgs := initializeCacheHandlerTestArgs(t, &tc.fileCacheConfig, cacheDir)
 			// Check async job and file info cache not preset for object_1
 			testObjectName := "object_1"
 			existingJob := chTestArgs.jobManager.GetJob(testObjectName, chTestArgs.bucket.Name())
@@ -716,14 +732,16 @@ func Test_GetCacheHandle_ConcurrentSameFile(t *testing.T) {
 			actualJob := chTestArgs.jobManager.GetJob(testObjectName, chTestArgs.bucket.Name())
 			jobStatus := actualJob.GetStatus()
 			assert.Equal(t, downloader.NotStarted, jobStatus.Name)
-			assert.True(t, doesFileExist(t, util.GetDownloadPath(chTestArgs.cacheDir,
-				util.GetObjectPath(chTestArgs.bucket.Name(), testObjectName))))
+			downloadPath, err := util.GetDownloadPath(chTestArgs.cacheDir,
+				util.GetObjectPath(chTestArgs.bucket.Name(), testObjectName))
+			require.NoError(t, err)
+			assert.True(t, doesFileExist(t, downloadPath))
 		})
 	}
 }
 
 func Test_GetCacheHandle_ConcurrentDifferentFiles(t *testing.T) {
-	cacheDir := path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir")
+	cacheDir := createTestCacheDir(t, "cache_handler_test")
 	chTestArgs := initializeCacheHandlerTestArgs(t, &cfg.FileCacheConfig{EnableCrc: true}, cacheDir)
 	existingJob := getDownloadJobForTestObject(t, chTestArgs)
 	require.Equal(t, downloader.NotStarted, existingJob.GetStatus().Name)
@@ -756,7 +774,7 @@ func Test_GetCacheHandle_ConcurrentDifferentFiles(t *testing.T) {
 }
 
 func Test_InvalidateCache_WhenAlreadyInCache(t *testing.T) {
-	cacheDir := path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir")
+	cacheDir := createTestCacheDir(t, "cache_handler_test")
 	chTestArgs := initializeCacheHandlerTestArgs(t, &cfg.FileCacheConfig{EnableCrc: true}, cacheDir)
 	existingJob := getDownloadJobForTestObject(t, chTestArgs)
 	require.Equal(t, downloader.NotStarted, existingJob.GetStatus().Name)
@@ -774,7 +792,7 @@ func Test_InvalidateCache_WhenAlreadyInCache(t *testing.T) {
 }
 
 func Test_InvalidateCache_WhenEntryNotInCache(t *testing.T) {
-	cacheDir := path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir")
+	cacheDir := createTestCacheDir(t, "cache_handler_test")
 	chTestArgs := initializeCacheHandlerTestArgs(t, &cfg.FileCacheConfig{EnableCrc: true}, cacheDir)
 	minObject := createObject(t, chTestArgs.bucket, "object_1", []byte("content of object_1"))
 	require.False(t, isEntryInFileInfoCache(t, chTestArgs.cache, minObject.Name, chTestArgs.bucket.Name()))
@@ -791,7 +809,6 @@ func Test_InvalidateCache_Truncates(t *testing.T) {
 	tbl := []struct {
 		name                         string
 		fileCacheConfig              cfg.FileCacheConfig
-		cacheDir                     string
 		isCacheHandleReadErrExpected bool
 		isInvalidateCacheErrExpected bool
 		isCacheFileReadErrExpected   bool
@@ -799,7 +816,6 @@ func Test_InvalidateCache_Truncates(t *testing.T) {
 		{
 			name:                         "Non parallel downloads",
 			fileCacheConfig:              cfg.FileCacheConfig{EnableCrc: true},
-			cacheDir:                     path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir"),
 			isCacheHandleReadErrExpected: false,
 			isInvalidateCacheErrExpected: false,
 			isCacheFileReadErrExpected:   true,
@@ -814,7 +830,6 @@ func Test_InvalidateCache_Truncates(t *testing.T) {
 				DownloadChunkSizeMb:      3,
 				WriteBufferSize:          4 * 1024 * 1024,
 			},
-			cacheDir: path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir"),
 			// Error is expected in parallel downloads because the foreground reads
 			// doesn't wait for async job to download till the requested offset unlike
 			// in case of non-parallel downloads for sequential reads.
@@ -825,7 +840,8 @@ func Test_InvalidateCache_Truncates(t *testing.T) {
 	}
 	for _, tc := range tbl {
 		t.Run(tc.name, func(t *testing.T) {
-			chTestArgs := initializeCacheHandlerTestArgs(t, &tc.fileCacheConfig, tc.cacheDir)
+			cacheDir := createTestCacheDir(t, "cache_handler_test")
+			chTestArgs := initializeCacheHandlerTestArgs(t, &tc.fileCacheConfig, cacheDir)
 			objectContent := []byte("content of object_1")
 			minObject := createObject(t, chTestArgs.bucket, "object_1", objectContent)
 			cacheHandle, err := chTestArgs.cacheHandler.GetCacheHandle(minObject, chTestArgs.bucket, false, 0)
@@ -844,7 +860,8 @@ func Test_InvalidateCache_Truncates(t *testing.T) {
 			require.Nil(t, cacheHandle.Close())
 			// Open cache file before invalidation
 			objectPath := util.GetObjectPath(chTestArgs.bucket.Name(), minObject.Name)
-			downloadPath := util.GetDownloadPath(chTestArgs.cacheDir, objectPath)
+			downloadPath, err := util.GetDownloadPath(chTestArgs.cacheDir, objectPath)
+			require.NoError(t, err)
 			file, err := os.OpenFile(downloadPath, os.O_RDONLY, 0600)
 			require.NoError(t, err)
 			defer func() {
@@ -873,12 +890,10 @@ func Test_InvalidateCache_ConcurrentSameFile(t *testing.T) {
 	tbl := []struct {
 		name            string
 		fileCacheConfig cfg.FileCacheConfig
-		cacheDir        string
 	}{
 		{
 			name:            "Non parallel downloads",
 			fileCacheConfig: cfg.FileCacheConfig{EnableCrc: true},
-			cacheDir:        path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir"),
 		},
 		{
 			name: "Parallel downloads",
@@ -890,12 +905,12 @@ func Test_InvalidateCache_ConcurrentSameFile(t *testing.T) {
 				DownloadChunkSizeMb:      3,
 				WriteBufferSize:          4 * 1024 * 1024,
 			},
-			cacheDir: path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir"),
 		},
 	}
 	for _, tc := range tbl {
 		t.Run(tc.name, func(t *testing.T) {
-			chTestArgs := initializeCacheHandlerTestArgs(t, &tc.fileCacheConfig, tc.cacheDir)
+			cacheDir := createTestCacheDir(t, "cache_handler_test")
+			chTestArgs := initializeCacheHandlerTestArgs(t, &tc.fileCacheConfig, cacheDir)
 			existingJob := getDownloadJobForTestObject(t, chTestArgs)
 			require.Equal(t, downloader.NotStarted, existingJob.GetStatus().Name)
 			require.True(t, isEntryInFileInfoCache(t, chTestArgs.cache, chTestArgs.object.Name, chTestArgs.bucket.Name()))
@@ -927,12 +942,10 @@ func Test_InvalidateCache_ConcurrentDifferentFiles(t *testing.T) {
 	tbl := []struct {
 		name            string
 		fileCacheConfig cfg.FileCacheConfig
-		cacheDir        string
 	}{
 		{
 			name:            "Non parallel downloads",
 			fileCacheConfig: cfg.FileCacheConfig{EnableCrc: true},
-			cacheDir:        path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir"),
 		},
 		{
 			name: "Parallel downloads",
@@ -944,12 +957,12 @@ func Test_InvalidateCache_ConcurrentDifferentFiles(t *testing.T) {
 				DownloadChunkSizeMb:      3,
 				WriteBufferSize:          4 * 1024 * 1024,
 			},
-			cacheDir: path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir"),
 		},
 	}
 	for _, tc := range tbl {
 		t.Run(tc.name, func(t *testing.T) {
-			chTestArgs := initializeCacheHandlerTestArgs(t, &tc.fileCacheConfig, tc.cacheDir)
+			cacheDir := createTestCacheDir(t, "cache_handler_test")
+			chTestArgs := initializeCacheHandlerTestArgs(t, &tc.fileCacheConfig, cacheDir)
 			wg := sync.WaitGroup{}
 			invalidateCacheTestFun := func(index int) {
 				defer wg.Done()
@@ -978,12 +991,10 @@ func Test_InvalidateCache_GetCacheHandle_Concurrent(t *testing.T) {
 	tbl := []struct {
 		name            string
 		fileCacheConfig cfg.FileCacheConfig
-		cacheDir        string
 	}{
 		{
 			name:            "Non parallel downloads",
 			fileCacheConfig: cfg.FileCacheConfig{EnableCrc: true},
-			cacheDir:        path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir"),
 		},
 		{
 			name: "Parallel downloads",
@@ -995,12 +1006,12 @@ func Test_InvalidateCache_GetCacheHandle_Concurrent(t *testing.T) {
 				DownloadChunkSizeMb:      3,
 				WriteBufferSize:          4 * 1024 * 1024,
 			},
-			cacheDir: path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir"),
 		},
 	}
 	for _, tc := range tbl {
 		t.Run(tc.name, func(t *testing.T) {
-			chTestArgs := initializeCacheHandlerTestArgs(t, &tc.fileCacheConfig, tc.cacheDir)
+			cacheDir := createTestCacheDir(t, "cache_handler_test")
+			chTestArgs := initializeCacheHandlerTestArgs(t, &tc.fileCacheConfig, cacheDir)
 			wg := sync.WaitGroup{}
 			invalidateCacheTestFun := func(index int) {
 				defer wg.Done()
@@ -1041,14 +1052,12 @@ func Test_Destroy(t *testing.T) {
 	tbl := []struct {
 		name                     string
 		fileCacheConfig          cfg.FileCacheConfig
-		cacheDir                 string
 		isCacheHandleErrExpected bool
 		expectedJobStatus        []string
 	}{
 		{
 			name:                     "Non parallel downloads",
 			fileCacheConfig:          cfg.FileCacheConfig{EnableCrc: true},
-			cacheDir:                 path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir"),
 			isCacheHandleErrExpected: false,
 			expectedJobStatus:        []string{string(downloader.Completed)},
 		},
@@ -1062,7 +1071,6 @@ func Test_Destroy(t *testing.T) {
 				DownloadChunkSizeMb:      3,
 				WriteBufferSize:          4 * 1024 * 1024,
 			},
-			cacheDir: path.Join(os.Getenv("HOME"), "CacheHandlerTest/dir"),
 			// Error is expected in parallel downloads because the foreground reads
 			// doesn't wait for async job to download till the requested offset unlike
 			// in case of non-parallel downloads for sequential reads.
@@ -1072,7 +1080,8 @@ func Test_Destroy(t *testing.T) {
 	}
 	for _, tc := range tbl {
 		t.Run(tc.name, func(t *testing.T) {
-			chTestArgs := initializeCacheHandlerTestArgs(t, &tc.fileCacheConfig, tc.cacheDir)
+			cacheDir := createTestCacheDir(t, "cache_handler_test")
+			chTestArgs := initializeCacheHandlerTestArgs(t, &tc.fileCacheConfig, cacheDir)
 			minObject1 := createObject(t, chTestArgs.bucket, "object_1", []byte("content of object_1"))
 			minObject2 := createObject(t, chTestArgs.bucket, "object_2", []byte("content of object_2"))
 			cacheHandle1, err := chTestArgs.cacheHandler.GetCacheHandle(minObject1, chTestArgs.bucket, true, 0)
@@ -1124,7 +1133,7 @@ func Test_Destroy(t *testing.T) {
 }
 
 func Test_NewCacheHandler_WithSizeCalcFix(t *testing.T) {
-	cacheDir := t.TempDir()
+	cacheDir := createTestCacheDir(t, "cache_handler_test")
 	cache := lru.NewCache(100)
 	cacheDirVolumeBlockSize := diskutil.GetVolumeBlockSize(cacheDir)
 	// Create with volumeBlockSize
@@ -1150,7 +1159,7 @@ func Test_NewCacheHandler_WithSizeCalcFix(t *testing.T) {
 }
 
 func Test_NewCacheHandler_WithoutSizeCalcFix(t *testing.T) {
-	cacheDir := t.TempDir()
+	cacheDir := createTestCacheDir(t, "cache_handler_test")
 	cache := lru.NewCache(100)
 	cacheDirVolumeBlockSize := uint64(1)
 	handler := NewCacheHandler(cache, nil, cacheDir, util.DefaultFilePerm, util.DefaultDirPerm, "", "", false, cacheDirVolumeBlockSize)

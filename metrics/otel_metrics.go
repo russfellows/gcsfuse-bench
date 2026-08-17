@@ -499,19 +499,23 @@ var (
 	fsOpsLatencyFsOpSyncFileAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.String("fs_op", "SyncFile"),))
 	fsOpsLatencyFsOpUnlinkAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.String("fs_op", "Unlink"),))
 	fsOpsLatencyFsOpWriteFileAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.String("fs_op", "WriteFile"),))
-	fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonConcurrentLimitBreachedAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.String("open_mode", "read_write"),attribute.String("write_fallback_reason", "concurrent_limit_breached"),))
+	fsStreamingWriteFallbackCountOpenModeOtherWriteFallbackReasonConcurrencyLimitBreachedAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.String("open_mode", "other"),attribute.String("write_fallback_reason", "concurrency_limit_breached"),))
+	fsStreamingWriteFallbackCountOpenModeOtherWriteFallbackReasonExistingFileAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.String("open_mode", "other"),attribute.String("write_fallback_reason", "existing_file"),))
+	fsStreamingWriteFallbackCountOpenModeOtherWriteFallbackReasonOtherAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.String("open_mode", "other"),attribute.String("write_fallback_reason", "other"),))
+	fsStreamingWriteFallbackCountOpenModeOtherWriteFallbackReasonOutOfOrderAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.String("open_mode", "other"),attribute.String("write_fallback_reason", "out_of_order"),))
+	fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonConcurrencyLimitBreachedAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.String("open_mode", "read_write"),attribute.String("write_fallback_reason", "concurrency_limit_breached"),))
 	fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonExistingFileAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.String("open_mode", "read_write"),attribute.String("write_fallback_reason", "existing_file"),))
 	fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonOtherAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.String("open_mode", "read_write"),attribute.String("write_fallback_reason", "other"),))
 	fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonOutOfOrderAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.String("open_mode", "read_write"),attribute.String("write_fallback_reason", "out_of_order"),))
-	fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonConcurrentLimitBreachedAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.String("open_mode", "read_write_append"),attribute.String("write_fallback_reason", "concurrent_limit_breached"),))
+	fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonConcurrencyLimitBreachedAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.String("open_mode", "read_write_append"),attribute.String("write_fallback_reason", "concurrency_limit_breached"),))
 	fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonExistingFileAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.String("open_mode", "read_write_append"),attribute.String("write_fallback_reason", "existing_file"),))
 	fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonOtherAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.String("open_mode", "read_write_append"),attribute.String("write_fallback_reason", "other"),))
 	fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonOutOfOrderAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.String("open_mode", "read_write_append"),attribute.String("write_fallback_reason", "out_of_order"),))
-	fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonConcurrentLimitBreachedAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.String("open_mode", "write_only"),attribute.String("write_fallback_reason", "concurrent_limit_breached"),))
+	fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonConcurrencyLimitBreachedAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.String("open_mode", "write_only"),attribute.String("write_fallback_reason", "concurrency_limit_breached"),))
 	fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonExistingFileAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.String("open_mode", "write_only"),attribute.String("write_fallback_reason", "existing_file"),))
 	fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonOtherAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.String("open_mode", "write_only"),attribute.String("write_fallback_reason", "other"),))
 	fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonOutOfOrderAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.String("open_mode", "write_only"),attribute.String("write_fallback_reason", "out_of_order"),))
-	fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonConcurrentLimitBreachedAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.String("open_mode", "write_only_append"),attribute.String("write_fallback_reason", "concurrent_limit_breached"),))
+	fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonConcurrencyLimitBreachedAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.String("open_mode", "write_only_append"),attribute.String("write_fallback_reason", "concurrency_limit_breached"),))
 	fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonExistingFileAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.String("open_mode", "write_only_append"),attribute.String("write_fallback_reason", "existing_file"),))
 	fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonOtherAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.String("open_mode", "write_only_append"),attribute.String("write_fallback_reason", "other"),))
 	fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonOutOfOrderAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.String("open_mode", "write_only_append"),attribute.String("write_fallback_reason", "out_of_order"),))
@@ -565,6 +569,24 @@ var (
 	gcsRequestLatenciesGcsMethodUpdateObjectAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.String("gcs_method", "UpdateObject"),))
 	gcsRetryCountRetryErrorCategoryOTHERERRORSAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.String("retry_error_category", "OTHER_ERRORS"),))
 	gcsRetryCountRetryErrorCategorySTALLEDREADREQUESTAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.String("retry_error_category", "STALLED_READ_REQUEST"),))
+	metadataCacheReadCountCacheHitTrueEntryStatusLookupDetailFoundAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.Bool("cache_hit", true),attribute.String("lookup_detail", "found"),))
+	metadataCacheReadCountCacheHitTrueEntryStatusLookupDetailNotFoundAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.Bool("cache_hit", true),attribute.String("lookup_detail", "not_found"),))
+	metadataCacheReadCountCacheHitTrueEntryStatusLookupDetailTtlExpiredAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.Bool("cache_hit", true),attribute.String("lookup_detail", "ttl_expired"),))
+	metadataCacheReadCountCacheHitTrueEntryStatusNegativeLookupDetailFoundAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.Bool("cache_hit", true),attribute.String("entry_status", "negative"),attribute.String("lookup_detail", "found"),))
+	metadataCacheReadCountCacheHitTrueEntryStatusNegativeLookupDetailNotFoundAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.Bool("cache_hit", true),attribute.String("entry_status", "negative"),attribute.String("lookup_detail", "not_found"),))
+	metadataCacheReadCountCacheHitTrueEntryStatusNegativeLookupDetailTtlExpiredAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.Bool("cache_hit", true),attribute.String("entry_status", "negative"),attribute.String("lookup_detail", "ttl_expired"),))
+	metadataCacheReadCountCacheHitTrueEntryStatusPositiveLookupDetailFoundAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.Bool("cache_hit", true),attribute.String("entry_status", "positive"),attribute.String("lookup_detail", "found"),))
+	metadataCacheReadCountCacheHitTrueEntryStatusPositiveLookupDetailNotFoundAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.Bool("cache_hit", true),attribute.String("entry_status", "positive"),attribute.String("lookup_detail", "not_found"),))
+	metadataCacheReadCountCacheHitTrueEntryStatusPositiveLookupDetailTtlExpiredAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.Bool("cache_hit", true),attribute.String("entry_status", "positive"),attribute.String("lookup_detail", "ttl_expired"),))
+	metadataCacheReadCountCacheHitFalseEntryStatusLookupDetailFoundAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.Bool("cache_hit", false),attribute.String("lookup_detail", "found"),))
+	metadataCacheReadCountCacheHitFalseEntryStatusLookupDetailNotFoundAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.Bool("cache_hit", false),attribute.String("lookup_detail", "not_found"),))
+	metadataCacheReadCountCacheHitFalseEntryStatusLookupDetailTtlExpiredAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.Bool("cache_hit", false),attribute.String("lookup_detail", "ttl_expired"),))
+	metadataCacheReadCountCacheHitFalseEntryStatusNegativeLookupDetailFoundAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.Bool("cache_hit", false),attribute.String("entry_status", "negative"),attribute.String("lookup_detail", "found"),))
+	metadataCacheReadCountCacheHitFalseEntryStatusNegativeLookupDetailNotFoundAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.Bool("cache_hit", false),attribute.String("entry_status", "negative"),attribute.String("lookup_detail", "not_found"),))
+	metadataCacheReadCountCacheHitFalseEntryStatusNegativeLookupDetailTtlExpiredAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.Bool("cache_hit", false),attribute.String("entry_status", "negative"),attribute.String("lookup_detail", "ttl_expired"),))
+	metadataCacheReadCountCacheHitFalseEntryStatusPositiveLookupDetailFoundAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.Bool("cache_hit", false),attribute.String("entry_status", "positive"),attribute.String("lookup_detail", "found"),))
+	metadataCacheReadCountCacheHitFalseEntryStatusPositiveLookupDetailNotFoundAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.Bool("cache_hit", false),attribute.String("entry_status", "positive"),attribute.String("lookup_detail", "not_found"),))
+	metadataCacheReadCountCacheHitFalseEntryStatusPositiveLookupDetailTtlExpiredAttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.Bool("cache_hit", false),attribute.String("entry_status", "positive"),attribute.String("lookup_detail", "ttl_expired"),))
 	testUpdownCounterWithAttrsRequestTypeAttr1AttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.String("request_type", "attr1"),))
 	testUpdownCounterWithAttrsRequestTypeAttr2AttrSet = metric.WithAttributeSet(attribute.NewSet(attribute.String("request_type", "attr2"),)))
 
@@ -1017,19 +1039,23 @@ type otelMetrics struct {
 	fsOpsErrorCountFsErrorCategoryTOOMANYOPENFILESFsOpSyncFileAtomic *atomic.Int64
 	fsOpsErrorCountFsErrorCategoryTOOMANYOPENFILESFsOpUnlinkAtomic *atomic.Int64
 	fsOpsErrorCountFsErrorCategoryTOOMANYOPENFILESFsOpWriteFileAtomic *atomic.Int64
-	fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonConcurrentLimitBreachedAtomic *atomic.Int64
+	fsStreamingWriteFallbackCountOpenModeOtherWriteFallbackReasonConcurrencyLimitBreachedAtomic *atomic.Int64
+	fsStreamingWriteFallbackCountOpenModeOtherWriteFallbackReasonExistingFileAtomic *atomic.Int64
+	fsStreamingWriteFallbackCountOpenModeOtherWriteFallbackReasonOtherAtomic *atomic.Int64
+	fsStreamingWriteFallbackCountOpenModeOtherWriteFallbackReasonOutOfOrderAtomic *atomic.Int64
+	fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonConcurrencyLimitBreachedAtomic *atomic.Int64
 	fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonExistingFileAtomic *atomic.Int64
 	fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonOtherAtomic *atomic.Int64
 	fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonOutOfOrderAtomic *atomic.Int64
-	fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonConcurrentLimitBreachedAtomic *atomic.Int64
+	fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonConcurrencyLimitBreachedAtomic *atomic.Int64
 	fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonExistingFileAtomic *atomic.Int64
 	fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonOtherAtomic *atomic.Int64
 	fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonOutOfOrderAtomic *atomic.Int64
-	fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonConcurrentLimitBreachedAtomic *atomic.Int64
+	fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonConcurrencyLimitBreachedAtomic *atomic.Int64
 	fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonExistingFileAtomic *atomic.Int64
 	fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonOtherAtomic *atomic.Int64
 	fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonOutOfOrderAtomic *atomic.Int64
-	fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonConcurrentLimitBreachedAtomic *atomic.Int64
+	fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonConcurrencyLimitBreachedAtomic *atomic.Int64
 	fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonExistingFileAtomic *atomic.Int64
 	fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonOtherAtomic *atomic.Int64
 	fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonOutOfOrderAtomic *atomic.Int64
@@ -1065,6 +1091,24 @@ type otelMetrics struct {
 	gcsRequestCountGcsMethodUpdateObjectAtomic *atomic.Int64
 	gcsRetryCountRetryErrorCategoryOTHERERRORSAtomic *atomic.Int64
 	gcsRetryCountRetryErrorCategorySTALLEDREADREQUESTAtomic *atomic.Int64
+	metadataCacheReadCountCacheHitTrueEntryStatusLookupDetailFoundAtomic *atomic.Int64
+	metadataCacheReadCountCacheHitTrueEntryStatusLookupDetailNotFoundAtomic *atomic.Int64
+	metadataCacheReadCountCacheHitTrueEntryStatusLookupDetailTtlExpiredAtomic *atomic.Int64
+	metadataCacheReadCountCacheHitTrueEntryStatusNegativeLookupDetailFoundAtomic *atomic.Int64
+	metadataCacheReadCountCacheHitTrueEntryStatusNegativeLookupDetailNotFoundAtomic *atomic.Int64
+	metadataCacheReadCountCacheHitTrueEntryStatusNegativeLookupDetailTtlExpiredAtomic *atomic.Int64
+	metadataCacheReadCountCacheHitTrueEntryStatusPositiveLookupDetailFoundAtomic *atomic.Int64
+	metadataCacheReadCountCacheHitTrueEntryStatusPositiveLookupDetailNotFoundAtomic *atomic.Int64
+	metadataCacheReadCountCacheHitTrueEntryStatusPositiveLookupDetailTtlExpiredAtomic *atomic.Int64
+	metadataCacheReadCountCacheHitFalseEntryStatusLookupDetailFoundAtomic *atomic.Int64
+	metadataCacheReadCountCacheHitFalseEntryStatusLookupDetailNotFoundAtomic *atomic.Int64
+	metadataCacheReadCountCacheHitFalseEntryStatusLookupDetailTtlExpiredAtomic *atomic.Int64
+	metadataCacheReadCountCacheHitFalseEntryStatusNegativeLookupDetailFoundAtomic *atomic.Int64
+	metadataCacheReadCountCacheHitFalseEntryStatusNegativeLookupDetailNotFoundAtomic *atomic.Int64
+	metadataCacheReadCountCacheHitFalseEntryStatusNegativeLookupDetailTtlExpiredAtomic *atomic.Int64
+	metadataCacheReadCountCacheHitFalseEntryStatusPositiveLookupDetailFoundAtomic *atomic.Int64
+	metadataCacheReadCountCacheHitFalseEntryStatusPositiveLookupDetailNotFoundAtomic *atomic.Int64
+	metadataCacheReadCountCacheHitFalseEntryStatusPositiveLookupDetailTtlExpiredAtomic *atomic.Int64
 	testUpdownCounterAtomic *atomic.Int64
 	testUpdownCounterWithAttrsRequestTypeAttr1Atomic *atomic.Int64
 	testUpdownCounterWithAttrsRequestTypeAttr2Atomic *atomic.Int64
@@ -2219,10 +2263,24 @@ func (o *otelMetrics) FsStreamingWriteFallbackCount(
 		return
 	}
 		switch openMode {
+		case OpenModeOtherAttr:
+		switch writeFallbackReason {
+			case WriteFallbackReasonConcurrencyLimitBreachedAttr:
+			o.fsStreamingWriteFallbackCountOpenModeOtherWriteFallbackReasonConcurrencyLimitBreachedAtomic.Add(inc)
+			case WriteFallbackReasonExistingFileAttr:
+			o.fsStreamingWriteFallbackCountOpenModeOtherWriteFallbackReasonExistingFileAtomic.Add(inc)
+			case WriteFallbackReasonOtherAttr:
+			o.fsStreamingWriteFallbackCountOpenModeOtherWriteFallbackReasonOtherAtomic.Add(inc)
+			case WriteFallbackReasonOutOfOrderAttr:
+			o.fsStreamingWriteFallbackCountOpenModeOtherWriteFallbackReasonOutOfOrderAtomic.Add(inc)
+			default:
+				updateUnrecognizedAttribute(string(writeFallbackReason))
+				return
+		}
 		case OpenModeReadWriteAttr:
 		switch writeFallbackReason {
-			case WriteFallbackReasonConcurrentLimitBreachedAttr:
-			o.fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonConcurrentLimitBreachedAtomic.Add(inc)
+			case WriteFallbackReasonConcurrencyLimitBreachedAttr:
+			o.fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonConcurrencyLimitBreachedAtomic.Add(inc)
 			case WriteFallbackReasonExistingFileAttr:
 			o.fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonExistingFileAtomic.Add(inc)
 			case WriteFallbackReasonOtherAttr:
@@ -2235,8 +2293,8 @@ func (o *otelMetrics) FsStreamingWriteFallbackCount(
 		}
 		case OpenModeReadWriteAppendAttr:
 		switch writeFallbackReason {
-			case WriteFallbackReasonConcurrentLimitBreachedAttr:
-			o.fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonConcurrentLimitBreachedAtomic.Add(inc)
+			case WriteFallbackReasonConcurrencyLimitBreachedAttr:
+			o.fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonConcurrencyLimitBreachedAtomic.Add(inc)
 			case WriteFallbackReasonExistingFileAttr:
 			o.fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonExistingFileAtomic.Add(inc)
 			case WriteFallbackReasonOtherAttr:
@@ -2249,8 +2307,8 @@ func (o *otelMetrics) FsStreamingWriteFallbackCount(
 		}
 		case OpenModeWriteOnlyAttr:
 		switch writeFallbackReason {
-			case WriteFallbackReasonConcurrentLimitBreachedAttr:
-			o.fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonConcurrentLimitBreachedAtomic.Add(inc)
+			case WriteFallbackReasonConcurrencyLimitBreachedAttr:
+			o.fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonConcurrencyLimitBreachedAtomic.Add(inc)
 			case WriteFallbackReasonExistingFileAttr:
 			o.fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonExistingFileAtomic.Add(inc)
 			case WriteFallbackReasonOtherAttr:
@@ -2263,8 +2321,8 @@ func (o *otelMetrics) FsStreamingWriteFallbackCount(
 		}
 		case OpenModeWriteOnlyAppendAttr:
 		switch writeFallbackReason {
-			case WriteFallbackReasonConcurrentLimitBreachedAttr:
-			o.fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonConcurrentLimitBreachedAtomic.Add(inc)
+			case WriteFallbackReasonConcurrencyLimitBreachedAttr:
+			o.fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonConcurrencyLimitBreachedAtomic.Add(inc)
 			case WriteFallbackReasonExistingFileAttr:
 			o.fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonExistingFileAtomic.Add(inc)
 			case WriteFallbackReasonOtherAttr:
@@ -2466,6 +2524,100 @@ func (o *otelMetrics) GcsRetryCount(
 		default:
 			updateUnrecognizedAttribute(string(retryErrorCategory))
 			return
+	}
+}
+
+func (o *otelMetrics) MetadataCacheReadCount(
+		inc int64, cacheHit bool, entryStatus EntryStatus, lookupDetail LookupDetail) {
+	if inc < 0 {
+		logger.Errorf("Counter metric metadata_cache/read_count received a negative increment: %d", inc)
+		return
+	}
+		switch cacheHit {
+		case true:
+		switch entryStatus {
+			case EntryStatusAttr:
+			switch lookupDetail {
+				case LookupDetailFoundAttr:
+				o.metadataCacheReadCountCacheHitTrueEntryStatusLookupDetailFoundAtomic.Add(inc)
+				case LookupDetailNotFoundAttr:
+				o.metadataCacheReadCountCacheHitTrueEntryStatusLookupDetailNotFoundAtomic.Add(inc)
+				case LookupDetailTtlExpiredAttr:
+				o.metadataCacheReadCountCacheHitTrueEntryStatusLookupDetailTtlExpiredAtomic.Add(inc)
+				default:
+					updateUnrecognizedAttribute(string(lookupDetail))
+					return
+			}
+			case EntryStatusNegativeAttr:
+			switch lookupDetail {
+				case LookupDetailFoundAttr:
+				o.metadataCacheReadCountCacheHitTrueEntryStatusNegativeLookupDetailFoundAtomic.Add(inc)
+				case LookupDetailNotFoundAttr:
+				o.metadataCacheReadCountCacheHitTrueEntryStatusNegativeLookupDetailNotFoundAtomic.Add(inc)
+				case LookupDetailTtlExpiredAttr:
+				o.metadataCacheReadCountCacheHitTrueEntryStatusNegativeLookupDetailTtlExpiredAtomic.Add(inc)
+				default:
+					updateUnrecognizedAttribute(string(lookupDetail))
+					return
+			}
+			case EntryStatusPositiveAttr:
+			switch lookupDetail {
+				case LookupDetailFoundAttr:
+				o.metadataCacheReadCountCacheHitTrueEntryStatusPositiveLookupDetailFoundAtomic.Add(inc)
+				case LookupDetailNotFoundAttr:
+				o.metadataCacheReadCountCacheHitTrueEntryStatusPositiveLookupDetailNotFoundAtomic.Add(inc)
+				case LookupDetailTtlExpiredAttr:
+				o.metadataCacheReadCountCacheHitTrueEntryStatusPositiveLookupDetailTtlExpiredAtomic.Add(inc)
+				default:
+					updateUnrecognizedAttribute(string(lookupDetail))
+					return
+			}
+			default:
+				updateUnrecognizedAttribute(string(entryStatus))
+				return
+		}
+		case false:
+		switch entryStatus {
+			case EntryStatusAttr:
+			switch lookupDetail {
+				case LookupDetailFoundAttr:
+				o.metadataCacheReadCountCacheHitFalseEntryStatusLookupDetailFoundAtomic.Add(inc)
+				case LookupDetailNotFoundAttr:
+				o.metadataCacheReadCountCacheHitFalseEntryStatusLookupDetailNotFoundAtomic.Add(inc)
+				case LookupDetailTtlExpiredAttr:
+				o.metadataCacheReadCountCacheHitFalseEntryStatusLookupDetailTtlExpiredAtomic.Add(inc)
+				default:
+					updateUnrecognizedAttribute(string(lookupDetail))
+					return
+			}
+			case EntryStatusNegativeAttr:
+			switch lookupDetail {
+				case LookupDetailFoundAttr:
+				o.metadataCacheReadCountCacheHitFalseEntryStatusNegativeLookupDetailFoundAtomic.Add(inc)
+				case LookupDetailNotFoundAttr:
+				o.metadataCacheReadCountCacheHitFalseEntryStatusNegativeLookupDetailNotFoundAtomic.Add(inc)
+				case LookupDetailTtlExpiredAttr:
+				o.metadataCacheReadCountCacheHitFalseEntryStatusNegativeLookupDetailTtlExpiredAtomic.Add(inc)
+				default:
+					updateUnrecognizedAttribute(string(lookupDetail))
+					return
+			}
+			case EntryStatusPositiveAttr:
+			switch lookupDetail {
+				case LookupDetailFoundAttr:
+				o.metadataCacheReadCountCacheHitFalseEntryStatusPositiveLookupDetailFoundAtomic.Add(inc)
+				case LookupDetailNotFoundAttr:
+				o.metadataCacheReadCountCacheHitFalseEntryStatusPositiveLookupDetailNotFoundAtomic.Add(inc)
+				case LookupDetailTtlExpiredAttr:
+				o.metadataCacheReadCountCacheHitFalseEntryStatusPositiveLookupDetailTtlExpiredAtomic.Add(inc)
+				default:
+					updateUnrecognizedAttribute(string(lookupDetail))
+					return
+			}
+			default:
+				updateUnrecognizedAttribute(string(entryStatus))
+				return
+		}
 	}
 }
 
@@ -2970,19 +3122,23 @@ func NewOTelMetrics(ctx context.Context, workers int, bufferSize int) (*otelMetr
 
 
 
-	var fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonConcurrentLimitBreachedAtomic,
+	var fsStreamingWriteFallbackCountOpenModeOtherWriteFallbackReasonConcurrencyLimitBreachedAtomic,
+	fsStreamingWriteFallbackCountOpenModeOtherWriteFallbackReasonExistingFileAtomic,
+	fsStreamingWriteFallbackCountOpenModeOtherWriteFallbackReasonOtherAtomic,
+	fsStreamingWriteFallbackCountOpenModeOtherWriteFallbackReasonOutOfOrderAtomic,
+	fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonConcurrencyLimitBreachedAtomic,
 	fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonExistingFileAtomic,
 	fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonOtherAtomic,
 	fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonOutOfOrderAtomic,
-	fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonConcurrentLimitBreachedAtomic,
+	fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonConcurrencyLimitBreachedAtomic,
 	fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonExistingFileAtomic,
 	fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonOtherAtomic,
 	fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonOutOfOrderAtomic,
-	fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonConcurrentLimitBreachedAtomic,
+	fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonConcurrencyLimitBreachedAtomic,
 	fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonExistingFileAtomic,
 	fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonOtherAtomic,
 	fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonOutOfOrderAtomic,
-	fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonConcurrentLimitBreachedAtomic,
+	fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonConcurrencyLimitBreachedAtomic,
 	fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonExistingFileAtomic,
 	fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonOtherAtomic,
 	fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonOutOfOrderAtomic atomic.Int64
@@ -3032,6 +3188,26 @@ func NewOTelMetrics(ctx context.Context, workers int, bufferSize int) (*otelMetr
 
 	var gcsRetryCountRetryErrorCategoryOTHERERRORSAtomic,
 	gcsRetryCountRetryErrorCategorySTALLEDREADREQUESTAtomic atomic.Int64
+
+
+	var metadataCacheReadCountCacheHitTrueEntryStatusLookupDetailFoundAtomic,
+	metadataCacheReadCountCacheHitTrueEntryStatusLookupDetailNotFoundAtomic,
+	metadataCacheReadCountCacheHitTrueEntryStatusLookupDetailTtlExpiredAtomic,
+	metadataCacheReadCountCacheHitTrueEntryStatusNegativeLookupDetailFoundAtomic,
+	metadataCacheReadCountCacheHitTrueEntryStatusNegativeLookupDetailNotFoundAtomic,
+	metadataCacheReadCountCacheHitTrueEntryStatusNegativeLookupDetailTtlExpiredAtomic,
+	metadataCacheReadCountCacheHitTrueEntryStatusPositiveLookupDetailFoundAtomic,
+	metadataCacheReadCountCacheHitTrueEntryStatusPositiveLookupDetailNotFoundAtomic,
+	metadataCacheReadCountCacheHitTrueEntryStatusPositiveLookupDetailTtlExpiredAtomic,
+	metadataCacheReadCountCacheHitFalseEntryStatusLookupDetailFoundAtomic,
+	metadataCacheReadCountCacheHitFalseEntryStatusLookupDetailNotFoundAtomic,
+	metadataCacheReadCountCacheHitFalseEntryStatusLookupDetailTtlExpiredAtomic,
+	metadataCacheReadCountCacheHitFalseEntryStatusNegativeLookupDetailFoundAtomic,
+	metadataCacheReadCountCacheHitFalseEntryStatusNegativeLookupDetailNotFoundAtomic,
+	metadataCacheReadCountCacheHitFalseEntryStatusNegativeLookupDetailTtlExpiredAtomic,
+	metadataCacheReadCountCacheHitFalseEntryStatusPositiveLookupDetailFoundAtomic,
+	metadataCacheReadCountCacheHitFalseEntryStatusPositiveLookupDetailNotFoundAtomic,
+	metadataCacheReadCountCacheHitFalseEntryStatusPositiveLookupDetailTtlExpiredAtomic atomic.Int64
 
 
 
@@ -3542,19 +3718,23 @@ func NewOTelMetrics(ctx context.Context, workers int, bufferSize int) (*otelMetr
 		metric.WithDescription("The cumulative number of streaming write fallbacks with reason attached"),
 		metric.WithUnit(""),
 		metric.WithInt64Callback(func(_ context.Context, obsrv metric.Int64Observer) error {
-			conditionallyObserve(obsrv, &fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonConcurrentLimitBreachedAtomic, fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonConcurrentLimitBreachedAttrSet)
+			conditionallyObserve(obsrv, &fsStreamingWriteFallbackCountOpenModeOtherWriteFallbackReasonConcurrencyLimitBreachedAtomic, fsStreamingWriteFallbackCountOpenModeOtherWriteFallbackReasonConcurrencyLimitBreachedAttrSet)
+			conditionallyObserve(obsrv, &fsStreamingWriteFallbackCountOpenModeOtherWriteFallbackReasonExistingFileAtomic, fsStreamingWriteFallbackCountOpenModeOtherWriteFallbackReasonExistingFileAttrSet)
+			conditionallyObserve(obsrv, &fsStreamingWriteFallbackCountOpenModeOtherWriteFallbackReasonOtherAtomic, fsStreamingWriteFallbackCountOpenModeOtherWriteFallbackReasonOtherAttrSet)
+			conditionallyObserve(obsrv, &fsStreamingWriteFallbackCountOpenModeOtherWriteFallbackReasonOutOfOrderAtomic, fsStreamingWriteFallbackCountOpenModeOtherWriteFallbackReasonOutOfOrderAttrSet)
+			conditionallyObserve(obsrv, &fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonConcurrencyLimitBreachedAtomic, fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonConcurrencyLimitBreachedAttrSet)
 			conditionallyObserve(obsrv, &fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonExistingFileAtomic, fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonExistingFileAttrSet)
 			conditionallyObserve(obsrv, &fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonOtherAtomic, fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonOtherAttrSet)
 			conditionallyObserve(obsrv, &fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonOutOfOrderAtomic, fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonOutOfOrderAttrSet)
-			conditionallyObserve(obsrv, &fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonConcurrentLimitBreachedAtomic, fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonConcurrentLimitBreachedAttrSet)
+			conditionallyObserve(obsrv, &fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonConcurrencyLimitBreachedAtomic, fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonConcurrencyLimitBreachedAttrSet)
 			conditionallyObserve(obsrv, &fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonExistingFileAtomic, fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonExistingFileAttrSet)
 			conditionallyObserve(obsrv, &fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonOtherAtomic, fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonOtherAttrSet)
 			conditionallyObserve(obsrv, &fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonOutOfOrderAtomic, fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonOutOfOrderAttrSet)
-			conditionallyObserve(obsrv, &fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonConcurrentLimitBreachedAtomic, fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonConcurrentLimitBreachedAttrSet)
+			conditionallyObserve(obsrv, &fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonConcurrencyLimitBreachedAtomic, fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonConcurrencyLimitBreachedAttrSet)
 			conditionallyObserve(obsrv, &fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonExistingFileAtomic, fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonExistingFileAttrSet)
 			conditionallyObserve(obsrv, &fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonOtherAtomic, fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonOtherAttrSet)
 			conditionallyObserve(obsrv, &fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonOutOfOrderAtomic, fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonOutOfOrderAttrSet)
-			conditionallyObserve(obsrv, &fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonConcurrentLimitBreachedAtomic, fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonConcurrentLimitBreachedAttrSet)
+			conditionallyObserve(obsrv, &fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonConcurrencyLimitBreachedAtomic, fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonConcurrencyLimitBreachedAttrSet)
 			conditionallyObserve(obsrv, &fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonExistingFileAtomic, fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonExistingFileAttrSet)
 			conditionallyObserve(obsrv, &fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonOtherAtomic, fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonOtherAttrSet)
 			conditionallyObserve(obsrv, &fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonOutOfOrderAtomic, fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonOutOfOrderAttrSet)
@@ -3646,13 +3826,39 @@ func NewOTelMetrics(ctx context.Context, workers int, bufferSize int) (*otelMetr
 			return nil
 		}))
 
-	readBlockSizes, err16 := meter.Int64Histogram("read/block_sizes",
+
+	_, err16 := meter.Int64ObservableCounter("metadata_cache/read_count",
+		metric.WithDescription("Total number of read requests to the metadata cache. Use attributes to analyze hit/miss ratios, entry types, and specific lookup outcomes (e.g., expiration vs. total absence)."),
+		metric.WithUnit(""),
+		metric.WithInt64Callback(func(_ context.Context, obsrv metric.Int64Observer) error {
+			conditionallyObserve(obsrv, &metadataCacheReadCountCacheHitTrueEntryStatusLookupDetailFoundAtomic, metadataCacheReadCountCacheHitTrueEntryStatusLookupDetailFoundAttrSet)
+			conditionallyObserve(obsrv, &metadataCacheReadCountCacheHitTrueEntryStatusLookupDetailNotFoundAtomic, metadataCacheReadCountCacheHitTrueEntryStatusLookupDetailNotFoundAttrSet)
+			conditionallyObserve(obsrv, &metadataCacheReadCountCacheHitTrueEntryStatusLookupDetailTtlExpiredAtomic, metadataCacheReadCountCacheHitTrueEntryStatusLookupDetailTtlExpiredAttrSet)
+			conditionallyObserve(obsrv, &metadataCacheReadCountCacheHitTrueEntryStatusNegativeLookupDetailFoundAtomic, metadataCacheReadCountCacheHitTrueEntryStatusNegativeLookupDetailFoundAttrSet)
+			conditionallyObserve(obsrv, &metadataCacheReadCountCacheHitTrueEntryStatusNegativeLookupDetailNotFoundAtomic, metadataCacheReadCountCacheHitTrueEntryStatusNegativeLookupDetailNotFoundAttrSet)
+			conditionallyObserve(obsrv, &metadataCacheReadCountCacheHitTrueEntryStatusNegativeLookupDetailTtlExpiredAtomic, metadataCacheReadCountCacheHitTrueEntryStatusNegativeLookupDetailTtlExpiredAttrSet)
+			conditionallyObserve(obsrv, &metadataCacheReadCountCacheHitTrueEntryStatusPositiveLookupDetailFoundAtomic, metadataCacheReadCountCacheHitTrueEntryStatusPositiveLookupDetailFoundAttrSet)
+			conditionallyObserve(obsrv, &metadataCacheReadCountCacheHitTrueEntryStatusPositiveLookupDetailNotFoundAtomic, metadataCacheReadCountCacheHitTrueEntryStatusPositiveLookupDetailNotFoundAttrSet)
+			conditionallyObserve(obsrv, &metadataCacheReadCountCacheHitTrueEntryStatusPositiveLookupDetailTtlExpiredAtomic, metadataCacheReadCountCacheHitTrueEntryStatusPositiveLookupDetailTtlExpiredAttrSet)
+			conditionallyObserve(obsrv, &metadataCacheReadCountCacheHitFalseEntryStatusLookupDetailFoundAtomic, metadataCacheReadCountCacheHitFalseEntryStatusLookupDetailFoundAttrSet)
+			conditionallyObserve(obsrv, &metadataCacheReadCountCacheHitFalseEntryStatusLookupDetailNotFoundAtomic, metadataCacheReadCountCacheHitFalseEntryStatusLookupDetailNotFoundAttrSet)
+			conditionallyObserve(obsrv, &metadataCacheReadCountCacheHitFalseEntryStatusLookupDetailTtlExpiredAtomic, metadataCacheReadCountCacheHitFalseEntryStatusLookupDetailTtlExpiredAttrSet)
+			conditionallyObserve(obsrv, &metadataCacheReadCountCacheHitFalseEntryStatusNegativeLookupDetailFoundAtomic, metadataCacheReadCountCacheHitFalseEntryStatusNegativeLookupDetailFoundAttrSet)
+			conditionallyObserve(obsrv, &metadataCacheReadCountCacheHitFalseEntryStatusNegativeLookupDetailNotFoundAtomic, metadataCacheReadCountCacheHitFalseEntryStatusNegativeLookupDetailNotFoundAttrSet)
+			conditionallyObserve(obsrv, &metadataCacheReadCountCacheHitFalseEntryStatusNegativeLookupDetailTtlExpiredAtomic, metadataCacheReadCountCacheHitFalseEntryStatusNegativeLookupDetailTtlExpiredAttrSet)
+			conditionallyObserve(obsrv, &metadataCacheReadCountCacheHitFalseEntryStatusPositiveLookupDetailFoundAtomic, metadataCacheReadCountCacheHitFalseEntryStatusPositiveLookupDetailFoundAttrSet)
+			conditionallyObserve(obsrv, &metadataCacheReadCountCacheHitFalseEntryStatusPositiveLookupDetailNotFoundAtomic, metadataCacheReadCountCacheHitFalseEntryStatusPositiveLookupDetailNotFoundAttrSet)
+			conditionallyObserve(obsrv, &metadataCacheReadCountCacheHitFalseEntryStatusPositiveLookupDetailTtlExpiredAtomic, metadataCacheReadCountCacheHitFalseEntryStatusPositiveLookupDetailTtlExpiredAttrSet)
+			return nil
+		}))
+
+	readBlockSizes, err17 := meter.Int64Histogram("read/block_sizes",
 		metric.WithDescription("The cumulative distribution of read block sizes across different bucket boundaries"),
 		metric.WithUnit("By"),
-		metric.WithExplicitBucketBoundaries(8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576, 2097152, 4194304, 8388608, 16777216, 33554432, 67108864, 134217728))
+		metric.WithExplicitBucketBoundaries(0, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576, 2097152, 4194304, 8388608, 16777216, 33554432, 67108864, 134217728))
 
 
-	_, err17 := meter.Int64ObservableUpDownCounter("test/updown_counter",
+	_, err18 := meter.Int64ObservableUpDownCounter("test/updown_counter",
 		metric.WithDescription("Test metric for updown counters."),
 		metric.WithUnit(""),
 		metric.WithInt64Callback(func(_ context.Context, obsrv metric.Int64Observer) error {
@@ -3661,7 +3867,7 @@ func NewOTelMetrics(ctx context.Context, workers int, bufferSize int) (*otelMetr
 		}))
 
 
-	_, err18 := meter.Int64ObservableUpDownCounter("test/updown_counter_with_attrs",
+	_, err19 := meter.Int64ObservableUpDownCounter("test/updown_counter_with_attrs",
 		metric.WithDescription("Test metric for updown counters with attributes."),
 		metric.WithUnit(""),
 		metric.WithInt64Callback(func(_ context.Context, obsrv metric.Int64Observer) error {
@@ -3671,7 +3877,7 @@ func NewOTelMetrics(ctx context.Context, workers int, bufferSize int) (*otelMetr
 		}))
 
 
-	errs := []error{err0, err1, err2, err3, err4, err5, err6, err7, err8, err9, err10, err11, err12, err13, err14, err15, err16, err17, err18}
+	errs := []error{err0, err1, err2, err3, err4, err5, err6, err7, err8, err9, err10, err11, err12, err13, err14, err15, err16, err17, err18, err19}
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
 	}
@@ -4121,19 +4327,23 @@ func NewOTelMetrics(ctx context.Context, workers int, bufferSize int) (*otelMetr
 			fsOpsErrorCountFsErrorCategoryTOOMANYOPENFILESFsOpUnlinkAtomic: &fsOpsErrorCountFsErrorCategoryTOOMANYOPENFILESFsOpUnlinkAtomic,
 			fsOpsErrorCountFsErrorCategoryTOOMANYOPENFILESFsOpWriteFileAtomic: &fsOpsErrorCountFsErrorCategoryTOOMANYOPENFILESFsOpWriteFileAtomic,
 			fsOpsLatency: fsOpsLatency,
-			fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonConcurrentLimitBreachedAtomic: &fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonConcurrentLimitBreachedAtomic,
+			fsStreamingWriteFallbackCountOpenModeOtherWriteFallbackReasonConcurrencyLimitBreachedAtomic: &fsStreamingWriteFallbackCountOpenModeOtherWriteFallbackReasonConcurrencyLimitBreachedAtomic,
+			fsStreamingWriteFallbackCountOpenModeOtherWriteFallbackReasonExistingFileAtomic: &fsStreamingWriteFallbackCountOpenModeOtherWriteFallbackReasonExistingFileAtomic,
+			fsStreamingWriteFallbackCountOpenModeOtherWriteFallbackReasonOtherAtomic: &fsStreamingWriteFallbackCountOpenModeOtherWriteFallbackReasonOtherAtomic,
+			fsStreamingWriteFallbackCountOpenModeOtherWriteFallbackReasonOutOfOrderAtomic: &fsStreamingWriteFallbackCountOpenModeOtherWriteFallbackReasonOutOfOrderAtomic,
+			fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonConcurrencyLimitBreachedAtomic: &fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonConcurrencyLimitBreachedAtomic,
 			fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonExistingFileAtomic: &fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonExistingFileAtomic,
 			fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonOtherAtomic: &fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonOtherAtomic,
 			fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonOutOfOrderAtomic: &fsStreamingWriteFallbackCountOpenModeReadWriteWriteFallbackReasonOutOfOrderAtomic,
-			fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonConcurrentLimitBreachedAtomic: &fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonConcurrentLimitBreachedAtomic,
+			fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonConcurrencyLimitBreachedAtomic: &fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonConcurrencyLimitBreachedAtomic,
 			fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonExistingFileAtomic: &fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonExistingFileAtomic,
 			fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonOtherAtomic: &fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonOtherAtomic,
 			fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonOutOfOrderAtomic: &fsStreamingWriteFallbackCountOpenModeReadWriteAppendWriteFallbackReasonOutOfOrderAtomic,
-			fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonConcurrentLimitBreachedAtomic: &fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonConcurrentLimitBreachedAtomic,
+			fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonConcurrencyLimitBreachedAtomic: &fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonConcurrencyLimitBreachedAtomic,
 			fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonExistingFileAtomic: &fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonExistingFileAtomic,
 			fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonOtherAtomic: &fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonOtherAtomic,
 			fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonOutOfOrderAtomic: &fsStreamingWriteFallbackCountOpenModeWriteOnlyWriteFallbackReasonOutOfOrderAtomic,
-			fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonConcurrentLimitBreachedAtomic: &fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonConcurrentLimitBreachedAtomic,
+			fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonConcurrencyLimitBreachedAtomic: &fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonConcurrencyLimitBreachedAtomic,
 			fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonExistingFileAtomic: &fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonExistingFileAtomic,
 			fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonOtherAtomic: &fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonOtherAtomic,
 			fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonOutOfOrderAtomic: &fsStreamingWriteFallbackCountOpenModeWriteOnlyAppendWriteFallbackReasonOutOfOrderAtomic,
@@ -4170,6 +4380,24 @@ func NewOTelMetrics(ctx context.Context, workers int, bufferSize int) (*otelMetr
 			gcsRequestLatencies: gcsRequestLatencies,
 			gcsRetryCountRetryErrorCategoryOTHERERRORSAtomic: &gcsRetryCountRetryErrorCategoryOTHERERRORSAtomic,
 			gcsRetryCountRetryErrorCategorySTALLEDREADREQUESTAtomic: &gcsRetryCountRetryErrorCategorySTALLEDREADREQUESTAtomic,
+			metadataCacheReadCountCacheHitTrueEntryStatusLookupDetailFoundAtomic: &metadataCacheReadCountCacheHitTrueEntryStatusLookupDetailFoundAtomic,
+			metadataCacheReadCountCacheHitTrueEntryStatusLookupDetailNotFoundAtomic: &metadataCacheReadCountCacheHitTrueEntryStatusLookupDetailNotFoundAtomic,
+			metadataCacheReadCountCacheHitTrueEntryStatusLookupDetailTtlExpiredAtomic: &metadataCacheReadCountCacheHitTrueEntryStatusLookupDetailTtlExpiredAtomic,
+			metadataCacheReadCountCacheHitTrueEntryStatusNegativeLookupDetailFoundAtomic: &metadataCacheReadCountCacheHitTrueEntryStatusNegativeLookupDetailFoundAtomic,
+			metadataCacheReadCountCacheHitTrueEntryStatusNegativeLookupDetailNotFoundAtomic: &metadataCacheReadCountCacheHitTrueEntryStatusNegativeLookupDetailNotFoundAtomic,
+			metadataCacheReadCountCacheHitTrueEntryStatusNegativeLookupDetailTtlExpiredAtomic: &metadataCacheReadCountCacheHitTrueEntryStatusNegativeLookupDetailTtlExpiredAtomic,
+			metadataCacheReadCountCacheHitTrueEntryStatusPositiveLookupDetailFoundAtomic: &metadataCacheReadCountCacheHitTrueEntryStatusPositiveLookupDetailFoundAtomic,
+			metadataCacheReadCountCacheHitTrueEntryStatusPositiveLookupDetailNotFoundAtomic: &metadataCacheReadCountCacheHitTrueEntryStatusPositiveLookupDetailNotFoundAtomic,
+			metadataCacheReadCountCacheHitTrueEntryStatusPositiveLookupDetailTtlExpiredAtomic: &metadataCacheReadCountCacheHitTrueEntryStatusPositiveLookupDetailTtlExpiredAtomic,
+			metadataCacheReadCountCacheHitFalseEntryStatusLookupDetailFoundAtomic: &metadataCacheReadCountCacheHitFalseEntryStatusLookupDetailFoundAtomic,
+			metadataCacheReadCountCacheHitFalseEntryStatusLookupDetailNotFoundAtomic: &metadataCacheReadCountCacheHitFalseEntryStatusLookupDetailNotFoundAtomic,
+			metadataCacheReadCountCacheHitFalseEntryStatusLookupDetailTtlExpiredAtomic: &metadataCacheReadCountCacheHitFalseEntryStatusLookupDetailTtlExpiredAtomic,
+			metadataCacheReadCountCacheHitFalseEntryStatusNegativeLookupDetailFoundAtomic: &metadataCacheReadCountCacheHitFalseEntryStatusNegativeLookupDetailFoundAtomic,
+			metadataCacheReadCountCacheHitFalseEntryStatusNegativeLookupDetailNotFoundAtomic: &metadataCacheReadCountCacheHitFalseEntryStatusNegativeLookupDetailNotFoundAtomic,
+			metadataCacheReadCountCacheHitFalseEntryStatusNegativeLookupDetailTtlExpiredAtomic: &metadataCacheReadCountCacheHitFalseEntryStatusNegativeLookupDetailTtlExpiredAtomic,
+			metadataCacheReadCountCacheHitFalseEntryStatusPositiveLookupDetailFoundAtomic: &metadataCacheReadCountCacheHitFalseEntryStatusPositiveLookupDetailFoundAtomic,
+			metadataCacheReadCountCacheHitFalseEntryStatusPositiveLookupDetailNotFoundAtomic: &metadataCacheReadCountCacheHitFalseEntryStatusPositiveLookupDetailNotFoundAtomic,
+			metadataCacheReadCountCacheHitFalseEntryStatusPositiveLookupDetailTtlExpiredAtomic: &metadataCacheReadCountCacheHitFalseEntryStatusPositiveLookupDetailTtlExpiredAtomic,
 			readBlockSizes: readBlockSizes,
 			testUpdownCounterAtomic: &testUpdownCounterAtomic,
 			testUpdownCounterWithAttrsRequestTypeAttr1Atomic: &testUpdownCounterWithAttrsRequestTypeAttr1Atomic,

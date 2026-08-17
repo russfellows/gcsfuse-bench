@@ -196,7 +196,7 @@ func newBenchmarkRootCmd() *cobra.Command {
 				Severity:  logSeverity,
 				Format:    "text",
 				LogRotate: cfg.DefaultLoggingConfig().LogRotate,
-			}, "gcs-bench"); err != nil {
+			}, "gcs-bench", ""); err != nil {
 				return fmt.Errorf("initializing logger: %w", err)
 			}
 
@@ -255,6 +255,9 @@ func newBenchmarkRootCmd() *cobra.Command {
 					fmt.Fprintf(&logBuf, "RAPID mode: off (HTTP/2, no detection)\n")
 				}
 			}
+			storageClientConfig.WriteConfig = &cfg.WriteConfig{
+				FinalizeFileForRapid: finalizeForRapid,
+			}
 
 			logger.Infof("Creating GCS storage handle (bucket=%s)...\n", bucketName)
 			if verbosity >= 1 {
@@ -267,7 +270,7 @@ func newBenchmarkRootCmd() *cobra.Command {
 
 			// --- Get a raw bucket handle ---
 			ctx := context.Background()
-			bh, err := sh.BucketHandle(ctx, bucketName, "", finalizeForRapid)
+			bh, err := sh.BucketHandle(ctx, bucketName, "")
 			if err != nil {
 				return fmt.Errorf("BucketHandle(%q): %w", bucketName, err)
 			}

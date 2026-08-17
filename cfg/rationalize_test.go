@@ -484,7 +484,7 @@ func TestRationalize_WriteConfig(t *testing.T) {
 		config                   *Config
 		expectedCreateEmptyFile  bool
 		expectedMaxBlocksPerFile int64
-		expectedBlockSizeMB      int64
+		expectedBlockSizeMB      float64
 	}{
 		{
 			name: "valid_config_streaming_writes_enabled",
@@ -898,6 +898,34 @@ func TestRationalize_MetadataCacheConfig(t *testing.T) {
 			require.NoError(t, actualErr)
 			assert.Equal(t, tc.expectedConcurrentMetadataPrefetches, tc.config.MetadataCache.MetadataPrefetchMaxWorkers)
 			assert.Equal(t, tc.expectedMetadataPrefetchCount, tc.config.MetadataCache.MetadataPrefetchEntriesLimit)
+		})
+	}
+}
+
+func TestResolveOnlyDir(t *testing.T) {
+	testCases := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"Clean relative path", "foo/bar", "foo/bar"},
+		{"Trailing slash", "foo/bar/", "foo/bar"},
+		{"Leading slash", "/foo/bar", "foo/bar"},
+		{"Leading and trailing slashes", "/foo/bar/", "foo/bar"},
+		{"Relative parent segment", "foo/../bar/", "bar"},
+		{"Root slash", "/", ""},
+		{"Root dot", "/.", ""},
+		{"Parent directory", "..", ""},
+		{"Root parent directory", "/..", ""},
+		{"Current directory prefix", "./foo", "foo"},
+		{"Parent directory prefix", "../foo", "foo"},
+		{"Empty string", "", ""},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &Config{OnlyDir: tc.input}
+			resolveOnlyDir(c)
+			assert.Equal(t, tc.expected, c.OnlyDir)
 		})
 	}
 }

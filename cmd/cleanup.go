@@ -99,14 +99,17 @@ func newCleanupRootCmd() *cobra.Command {
 				storageClientConfig.EnableHNS = true
 				storageClientConfig.GrpcConnPoolSize = 4
 			}
+			finalizeForRapid := effectiveRapidMode != "off"
+			storageClientConfig.WriteConfig = &cfg.WriteConfig{
+				FinalizeFileForRapid: finalizeForRapid,
+			}
 
 			sh, err := internalstorage.NewStorageHandle(ctx, storageClientConfig, "")
 			if err != nil {
 				return fmt.Errorf("NewStorageHandle: %w", err)
 			}
 
-			finalizeForRapid := effectiveRapidMode != "off"
-			bh, err := sh.BucketHandle(ctx, bucket, "", finalizeForRapid)
+			bh, err := sh.BucketHandle(ctx, bucket, "")
 			if err != nil {
 				return fmt.Errorf("BucketHandle(%q): %w", bucket, err)
 			}

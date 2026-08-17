@@ -22,6 +22,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"time"
 
 	"golang.org/x/oauth2"
 )
@@ -47,7 +48,27 @@ func newProxyTokenSource(
 				return dialer.DialContext(ctx, u.Scheme, u.Path)
 			},
 		}
-		endpoint = "http://unix?" + u.RawQuery
+		if escapedFragment := u.EscapedFragment(); escapedFragment != "" {
+			relURL, err := url.Parse(escapedFragment)
+			if err != nil {
+				return nil, fmt.Errorf("parsing fragment %q: %w", escapedFragment, err)
+			}
+			targetURL := url.URL{
+				Scheme:   "http",
+				Host:     "unix",
+				Path:     relURL.Path,
+				RawPath:  relURL.RawPath,
+				RawQuery: relURL.RawQuery,
+			}
+			endpoint = targetURL.String()
+		} else {
+			targetURL := url.URL{
+				Scheme:   "http",
+				Host:     "unix",
+				RawQuery: u.RawQuery,
+			}
+			endpoint = targetURL.String()
+		}
 	}
 
 	ts = proxyTokenSource{
@@ -96,6 +117,10 @@ func (ts proxyTokenSource) Token() (token *oauth2.Token, err error) {
 	if err != nil {
 		err = fmt.Errorf("proxyTokenSource cannot decode body: %w", err)
 		return nil, err
+	}
+
+	if token.ExpiresIn != 0 && token.Expiry.IsZero() {
+		token.Expiry = time.Now().Add(time.Duration(token.ExpiresIn) * time.Second)
 	}
 
 	return token, nil

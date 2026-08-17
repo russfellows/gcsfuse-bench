@@ -19,7 +19,6 @@ import (
 	"context"
 	"log"
 	"os"
-	"path"
 	"strings"
 	"testing"
 
@@ -32,7 +31,66 @@ import (
 	"github.com/googlecloudplatform/gcsfuse/v3/tools/integration_tests/util/mounting/static_mounting"
 	"github.com/googlecloudplatform/gcsfuse/v3/tools/integration_tests/util/setup"
 	"github.com/googlecloudplatform/gcsfuse/v3/tools/integration_tests/util/test_suite"
+	"github.com/stretchr/testify/suite"
 )
+
+type operationsTestSuite struct {
+	suite.Suite
+}
+
+func (s *operationsTestSuite) TearDownTest() {
+	setup.SaveGCSFuseLogFileInCaseOfFailure(s.T())
+}
+
+func runOperationsSuite(t *testing.T, runSuiteFunc func()) {
+	// Run tests for mounted directory if the flag is set. This assumes that run flag is properly passed by GKE team as per the config.
+	if operationsConfig.GKEMountedDirectory != "" && operationsConfig.TestBucket != "" {
+		runSuiteFunc()
+		return
+	}
+
+	// Run tests for GCE environment otherwise.
+	flagsSet := setup.BuildFlagSets(*operationsConfig, bucketType, t.Name())
+	for _, flags := range flagsSet {
+		t.Run(strings.Join(flags, "_"), func(t *testing.T) {
+			// 1. Static mounting
+			t.Run("Static", func(t *testing.T) {
+				static_mounting.RunSuiteForStaticMounting(operationsConfig, flags, t, runSuiteFunc)
+			})
+
+			if setup.TestOnTPCEndPoint() {
+				return
+			}
+
+			// 2. Only-dir mounting
+			t.Run("OnlyDir", func(t *testing.T) {
+				only_dir_mounting.RunSuiteForOnlyDirMounting(ctx, storageClient, operationsConfig, flags, onlyDirMounted, t, runSuiteFunc)
+			})
+
+			// 3. Persistent mounting
+			t.Run("Persistent", func(t *testing.T) {
+				persistent_mounting.RunSuiteForPersistentMounting(operationsConfig, flags, t, runSuiteFunc)
+			})
+
+			// 4. Dynamic mounting
+			t.Run("Dynamic", func(t *testing.T) {
+				dynamic_mounting.RunSuiteForDynamicMounting(operationsConfig, flags, t, runSuiteFunc)
+			})
+
+			// 5. Creds tests (runs for different auth methods)
+			t.Run("Creds", func(t *testing.T) {
+				creds_tests.RunSuiteForDifferentAuthMethods(ctx, operationsConfig, storageClient, flags, "objectAdmin", t, runSuiteFunc)
+			})
+		})
+	}
+}
+
+func TestOperationsBase(t *testing.T) {
+	runOperationsSuite(t, func() {
+		suite.Run(t, new(operationsTestSuite))
+		suite.Run(t, &writeOperationsTest{isRapidWritesEnabled: false})
+	})
+}
 
 const DirForOperationTests = "dirForOperationsTest"
 const MoveFile = "move.txt"
@@ -91,79 +149,24 @@ const Content = "line 1\nline 2\n"
 const onlyDirMounted = "OnlyDirMountOperations"
 
 var (
-	storageClient *storage.Client
-	ctx           context.Context
+	storageClient    *storage.Client
+	ctx              context.Context
+	operationsConfig *test_suite.TestConfig
+	bucketType       string
 )
-
-func overrideFilePathsInFlagSet(t *test_suite.TestConfig, GCSFuseTempDirPath string) {
-	for _, flags := range t.Configs {
-		for i := range flags.Flags {
-			// Iterate over the indices of the flags slice
-			flags.Flags[i] = strings.ReplaceAll(flags.Flags[i], "/gcsfuse-tmp", path.Join(GCSFuseTempDirPath, "gcsfuse-tmp"))
-		}
-	}
-}
-
-func RunTestOnTPCEndPoint(cfg test_suite.Config, m *testing.M) int {
-	ctx = context.Background()
-	var err error
-	if storageClient, err = client.CreateStorageClient(ctx); err != nil {
-		log.Fatalf("Error creating storage client: %v\n", err)
-	}
-	cfg.Operations = make([]test_suite.TestConfig, 1)
-	cfg.Operations[0].TestBucket = setup.TestBucket()
-	cfg.Operations[0].GKEMountedDirectory = setup.MountedDirectory()
-	cfg.Operations[0].Configs = make([]test_suite.ConfigItem, 1)
-	cfg.Operations[0].Configs[0].Flags = []string{
-		"--enable-atomic-rename-object=true",
-		"--experimental-enable-json-read=true",
-		"--metadata-cache-ttl-secs=0 --enable-streaming-writes=false",
-		"--kernel-list-cache-ttl-secs=-1 --implicit-dirs=true",
-	}
-	cfg.Operations[0].Configs[0].Compatible = map[string]bool{"flat": true, "hns": true, "zonal": true}
-	var flags [][]string
-
-	// Iterate over the original flags and split each string by spaces
-	for _, flagSet := range cfg.Operations[0].Configs[0].Flags {
-		splitFlags := strings.Fields(flagSet)
-		flags = append(flags, splitFlags)
-	}
-	setup.SetUpTestDirForTestBucket(&cfg.Operations[0])
-	successCodeTPC := static_mounting.RunTestsWithConfigFile(&cfg.Operations[0], flags, m)
-	return successCodeTPC
-}
 
 func TestMain(m *testing.M) {
 	setup.ParseSetUpFlags()
 
 	// 1. Load and parse the common configuration.
 	cfg := test_suite.ReadConfigFile(setup.ConfigFile())
-
-	// TODO: b/469970353 : Update tpc_build.sh to run using test_config.yaml file.
-	if setup.TestOnTPCEndPoint() {
-		log.Println("Running TPC tests without config file.")
-		successCodeTPC := RunTestOnTPCEndPoint(cfg, m)
-		os.Exit(successCodeTPC)
-	}
-
 	if len(cfg.Operations) == 0 {
-		log.Println("No configuration found for operations tests in config. Using flags instead.")
-		// Populate the config manually.
-		cfg.Operations = make([]test_suite.TestConfig, 1)
-		cfg.Operations[0].TestBucket = setup.TestBucket()
-		cfg.Operations[0].GKEMountedDirectory = setup.MountedDirectory()
-		cfg.Operations[0].Configs = make([]test_suite.ConfigItem, 1)
-		cfg.Operations[0].Configs[0].Flags = []string{
-			"--metadata-cache-ttl-secs=0 --enable-streaming-writes=false",
-			"--kernel-list-cache-ttl-secs=-1 --implicit-dirs=true --enable-metadata-prefetch",
-			"--experimental-enable-json-read=true --enable-atomic-rename-object=true",
-			"--client-protocol=grpc --implicit-dirs=true --enable-atomic-rename-object=true --enable-metadata-prefetch",
-		}
-		cfg.Operations[0].Configs[0].Compatible = map[string]bool{"flat": true, "hns": true, "zonal": true}
+		log.Fatal("No configuration found for operations tests in config.")
 	}
 
 	ctx = context.Background()
-	bucketType := setup.TestEnvironment(ctx, &cfg.Operations[0])
+	operationsConfig = &cfg.Operations[0]
+	bucketType = setup.TestEnvironment(ctx, operationsConfig)
 
 	// 2. Create storage client before running tests.
 	var err error
@@ -175,37 +178,15 @@ func TestMain(m *testing.M) {
 	defer storageClient.Close()
 
 	// 3. To run mountedDirectory tests, we need both testBucket and mountedDirectory
-	if cfg.Operations[0].GKEMountedDirectory != "" && cfg.Operations[0].TestBucket != "" {
-		os.Exit(setup.RunTestsForMountedDirectory(cfg.Operations[0].GKEMountedDirectory, m))
+	if operationsConfig.GKEMountedDirectory != "" && operationsConfig.TestBucket != "" {
+		os.Exit(setup.RunTestsForMountedDirectory(operationsConfig.GKEMountedDirectory, m))
 	}
 
 	// 4. Override GKE specific paths with GCSFuse paths if running in GCE environment.
-	overrideFilePathsInFlagSet(&cfg.Operations[0], setup.TestDir())
+	setup.OverrideFilePathsInFlagSet(operationsConfig, setup.TestDir())
+	setup.SetUpTestDirForTestBucket(operationsConfig)
 
-	// Run tests for testBucket
-	// 5. Build the flag sets dynamically from the config.
-	flags := setup.BuildFlagSets(cfg.Operations[0], bucketType, "")
-	setup.SetUpTestDirForTestBucket(&cfg.Operations[0])
-
-	successCode := static_mounting.RunTestsWithConfigFile(&cfg.Operations[0], flags, m)
-
-	if successCode == 0 {
-		successCode = only_dir_mounting.RunTestsWithConfigFile(&cfg.Operations[0], flags, onlyDirMounted, m)
-	}
-
-	if successCode == 0 {
-		successCode = persistent_mounting.RunTestsWithConfigFile(&cfg.Operations[0], flags, m)
-	}
-
-	if successCode == 0 {
-		successCode = dynamic_mounting.RunTestsWithConfigFile(&cfg.Operations[0], flags, m)
-	}
-
-	if successCode == 0 {
-		// Test for admin permission on test bucket.
-		log.Printf("Running cred tests...")
-		successCode = creds_tests.RunTestsForDifferentAuthMethods(ctx, &cfg.Operations[0], storageClient, flags, "objectAdmin", m)
-	}
-
+	successCode := m.Run()
+	setup.SaveLogFileInCaseOfFailure(successCode)
 	os.Exit(successCode)
 }

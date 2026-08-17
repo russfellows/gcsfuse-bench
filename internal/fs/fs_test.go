@@ -29,6 +29,8 @@ import (
 	"testing"
 	"time"
 
+	"context"
+
 	"github.com/googlecloudplatform/gcsfuse/v3/cfg"
 	"github.com/googlecloudplatform/gcsfuse/v3/internal/fs"
 	"github.com/googlecloudplatform/gcsfuse/v3/internal/gcsx"
@@ -44,14 +46,16 @@ import (
 	"github.com/jacobsa/fuse/fusetesting"
 	. "github.com/jacobsa/ogletest"
 	"github.com/jacobsa/timeutil"
-	"golang.org/x/net/context"
 )
 
 const (
-	filePerms            os.FileMode = 0740
-	dirPerms                         = 0754
-	RenameDirLimit                   = 5
-	SequentialReadSizeMb             = 200
+	filePerms os.FileMode = 0740
+	dirPerms  os.FileMode = 0754
+)
+
+const (
+	RenameDirLimit       = 5
+	SequentialReadSizeMb = 200
 )
 
 func TestFS(t *testing.T) { RunTests(t) }
@@ -195,11 +199,11 @@ func (t *fsTest) SetUpTestSuite() {
 
 	// Initialize Fuse Loggers.
 	if mountCfg.ErrorLogger == nil {
-		mountCfg.ErrorLogger = logger.NewLegacyLogger(logger.LevelError, "fuse_errors: ", mountCfg.FSName)
+		mountCfg.ErrorLogger = logger.NewLegacyLogger(logger.LevelError, "fuse_errors: ", mountCfg.FSName, "")
 	}
 
 	if *fDebug {
-		mountCfg.DebugLogger = logger.NewLegacyLogger(logger.LevelDebug, "fuse: ", mountCfg.FSName)
+		mountCfg.DebugLogger = logger.NewLegacyLogger(logger.LevelDebug, "fuse: ", mountCfg.FSName, "")
 	}
 	// Mount the file system.
 	mfs, err = fuse.Mount(mntDir, server, &mountCfg)

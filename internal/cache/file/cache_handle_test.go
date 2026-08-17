@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"os"
@@ -42,16 +43,17 @@ import (
 	"github.com/googlecloudplatform/gcsfuse/v3/tracing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"golang.org/x/sync/semaphore"
 )
 
-const CacheMaxSize = 100 * util.MiB
-const ReadContentSize = 1 * util.MiB
+const CacheMaxSize = 5 * util.MiB
+const ReadContentSize = 32 * util.KiB
 
-const TestObjectSize = 16 * util.MiB
+const TestObjectSize = 1200 * util.KiB
 const TestObjectName = "foo.txt"
-const DefaultSequentialReadSizeMb = 17
+const DefaultSequentialReadSizeMb = 1
 
 type cacheHandleTest struct {
 	suite.Suite
@@ -101,9 +103,20 @@ func (cht *cacheHandleTest) verifyContentRead(readStartOffset int64, expectedCon
 	assert.True(cht.T(), reflect.DeepEqual(expectedContent, buf[:len(expectedContent)]))
 }
 
+func createTestCacheDir(t *testing.T, prefix string) string {
+	t.Helper()
+	cleanTestName := strings.ReplaceAll(t.Name(), "/", "_")
+	cacheDir, err := os.MkdirTemp("", fmt.Sprintf("%s_%s_*", prefix, cleanTestName))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = os.RemoveAll(cacheDir)
+	})
+	return cacheDir
+}
+
 func (cht *cacheHandleTest) SetupTest() {
 	locker.EnableInvariantsCheck()
-	cht.cacheDir = path.Join(os.Getenv("HOME"), "cache/dir")
+	cht.cacheDir = createTestCacheDir(cht.T(), "cache_handle_test")
 	ctx := context.Background()
 
 	// Create bucket in fake storage.
@@ -113,7 +126,7 @@ func (cht *cacheHandleTest) SetupTest() {
 	storageHandle := cht.fakeStorage.CreateStorageHandle()
 	mockClient.On("GetStorageLayout", mock.Anything, mock.Anything, mock.Anything).
 		Return(&controlpb.StorageLayout{}, nil)
-	cht.bucket, err = storageHandle.BucketHandle(ctx, storage.TestBucketName, "", false)
+	cht.bucket, err = storageHandle.BucketHandle(ctx, storage.TestBucketName, "")
 	assert.Nil(cht.T(), err)
 
 	// Create test object in the bucket.
@@ -156,6 +169,7 @@ func (cht *cacheHandleTest) SetupTest() {
 		1,
 	)
 
+	fileDownloadJob.ReadChunkSize = int64(util.MiB)
 	cht.cacheHandle = NewCacheHandle(readLocalFileHandle, fileDownloadJob, cht.cache, false, 0)
 }
 
@@ -240,7 +254,7 @@ func (cht *cacheHandleTest) Test_IsSequential_WhenPrevOffsetGreaterThanCurrent()
 func (cht *cacheHandleTest) Test_IsSequential_WhenOffsetDiffIsMoreThanMaxAllowed() {
 	cht.cacheHandle.isSequential.Store(true)
 	cht.cacheHandle.prevOffset.Store(5)
-	currentOffset := int64(8 + downloader.ReadChunkSize)
+	currentOffset := int64(8 + cht.cacheHandle.fileDownloadJob.ReadChunkSize)
 
 	isSeq := cht.cacheHandle.IsSequential(currentOffset)
 
@@ -260,7 +274,7 @@ func (cht *cacheHandleTest) Test_IsSequential_WhenOffsetDiffIsLessThanMaxAllowed
 func (cht *cacheHandleTest) Test_IsSequential_WhenOffsetDiffIsEqualToMaxAllowed() {
 	cht.cacheHandle.isSequential.Store(true)
 	cht.cacheHandle.prevOffset.Store(5)
-	currentOffset := int64(5 + downloader.ReadChunkSize)
+	currentOffset := int64(5 + cht.cacheHandle.fileDownloadJob.ReadChunkSize)
 
 	isSeq := cht.cacheHandle.IsSequential(currentOffset)
 
@@ -268,7 +282,7 @@ func (cht *cacheHandleTest) Test_IsSequential_WhenOffsetDiffIsEqualToMaxAllowed(
 }
 
 func (cht *cacheHandleTest) Test_shouldReadFromCache_WithJobStateIsNotStarted() {
-	requiredOffset := int64(downloader.ReadChunkSize + util.MiB)
+	requiredOffset := int64(cht.cacheHandle.fileDownloadJob.ReadChunkSize + util.MiB)
 	jobStatus := cht.cacheHandle.fileDownloadJob.GetStatus()
 	assert.Equal(cht.T(), downloader.NotStarted, jobStatus.Name)
 
@@ -279,7 +293,7 @@ func (cht *cacheHandleTest) Test_shouldReadFromCache_WithJobStateIsNotStarted() 
 }
 
 func (cht *cacheHandleTest) Test_shouldReadFromCache_WithJobStateIsFailed() {
-	requiredOffset := int64(downloader.ReadChunkSize + util.MiB)
+	requiredOffset := int64(cht.cacheHandle.fileDownloadJob.ReadChunkSize + util.MiB)
 	jobStatus := cht.cacheHandle.fileDownloadJob.GetStatus()
 	jobStatus.Name = downloader.Failed
 
@@ -290,7 +304,7 @@ func (cht *cacheHandleTest) Test_shouldReadFromCache_WithJobStateIsFailed() {
 }
 
 func (cht *cacheHandleTest) Test_shouldReadFromCache_WithJobStateIsInvalid() {
-	requiredOffset := int64(downloader.ReadChunkSize + util.MiB)
+	requiredOffset := int64(cht.cacheHandle.fileDownloadJob.ReadChunkSize + util.MiB)
 	jobStatus := cht.cacheHandle.fileDownloadJob.GetStatus()
 	jobStatus.Name = downloader.Invalid
 
@@ -301,7 +315,7 @@ func (cht *cacheHandleTest) Test_shouldReadFromCache_WithJobStateIsInvalid() {
 }
 
 func (cht *cacheHandleTest) Test_shouldReadFromCache_WithJobStateIsCompleted() {
-	requiredOffset := int64(downloader.ReadChunkSize + util.MiB)
+	requiredOffset := int64(cht.object.Size)
 	jobStatus := cht.cacheHandle.fileDownloadJob.GetStatus()
 	jobStatus.Name = downloader.Completed
 	jobStatus.Offset = int64(cht.object.Size)
@@ -312,7 +326,7 @@ func (cht *cacheHandleTest) Test_shouldReadFromCache_WithJobStateIsCompleted() {
 }
 
 func (cht *cacheHandleTest) Test_shouldReadFromCache_WithJobDownloadedOffsetIsLessThanRequiredOffset() {
-	requiredOffset := int64(downloader.ReadChunkSize + util.MiB)
+	requiredOffset := int64(cht.cacheHandle.fileDownloadJob.ReadChunkSize + util.MiB)
 	jobStatus := cht.cacheHandle.fileDownloadJob.GetStatus()
 	jobStatus.Name = downloader.Downloading
 	jobStatus.Offset = requiredOffset - 1
@@ -324,7 +338,7 @@ func (cht *cacheHandleTest) Test_shouldReadFromCache_WithJobDownloadedOffsetIsLe
 }
 
 func (cht *cacheHandleTest) Test_shouldReadFromCache_WithJobDownloadedOffsetSameAsRequiredOffset() {
-	requiredOffset := int64(downloader.ReadChunkSize + util.MiB)
+	requiredOffset := int64(cht.cacheHandle.fileDownloadJob.ReadChunkSize + util.MiB)
 	jobStatus := cht.cacheHandle.fileDownloadJob.GetStatus()
 	jobStatus.Name = downloader.Downloading
 	jobStatus.Offset = requiredOffset
@@ -346,7 +360,7 @@ func (cht *cacheHandleTest) Test_shouldReadFromCache_WithJobDownloadedOffsetIsGr
 }
 
 func (cht *cacheHandleTest) Test_shouldReadFromCache_WithNonNilJobStatusErr() {
-	requiredOffset := int64(downloader.ReadChunkSize + util.MiB)
+	requiredOffset := int64(cht.cacheHandle.fileDownloadJob.ReadChunkSize + util.MiB)
 	jobStatus := cht.cacheHandle.fileDownloadJob.GetStatus()
 	jobStatus.Name = downloader.Downloading
 	jobStatus.Offset = requiredOffset + 1
@@ -597,7 +611,7 @@ func (cht *cacheHandleTest) Test_RandomRead_CacheForRangeReadFalse() {
 func (cht *cacheHandleTest) Test_RandomRead_CacheForRangeReadFalseButCacheHit() {
 	ctx := context.Background()
 	// Download the job till util.MiB
-	jobStatus, err := cht.cacheHandle.fileDownloadJob.Download(ctx, int64(2*util.MiB), true)
+	jobStatus, err := cht.cacheHandle.fileDownloadJob.Download(ctx, int64(util.MiB), true)
 	assert.Nil(cht.T(), err)
 	assert.Equal(cht.T(), downloader.Downloading, jobStatus.Name)
 	dst := make([]byte, ReadContentSize)
@@ -913,4 +927,24 @@ func (cht *cacheHandleTest) Test_RandomRead_CacheForRangeReadFalse_And_ParallelD
 	assert.Equal(cht.T(), n, 0)
 	assert.False(cht.T(), cacheHit)
 	assert.True(cht.T(), errors.Is(err, util.ErrFallbackToGCS))
+}
+
+func Test_GetCacheHandle_PathTraversal(t *testing.T) {
+	// Arrange
+	cacheDir := createTestCacheDir(t, "cache_handle_test")
+	chTestArgs := initializeCacheHandlerTestArgs(t, &cfg.FileCacheConfig{EnableCrc: true}, cacheDir)
+	// Object name designed to escape the cache directory
+	object := &gcs.MinObject{
+		Name:       "../../../../etc/cron.d/pwn",
+		Generation: 1,
+		Size:       10,
+	}
+
+	// Act
+	_, err := chTestArgs.cacheHandler.GetCacheHandle(object, chTestArgs.bucket, true, 0)
+
+	// Assert
+	// We expect the cache handler to catch this and return a containment error
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "outside cache directory")
 }
